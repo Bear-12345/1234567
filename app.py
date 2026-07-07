@@ -38,6 +38,7 @@ import os
 import re
 import time
 import hmac
+import sqlite3
 import logging
 import secrets
 from functools import wraps
@@ -114,37 +115,95 @@ audit_handler.setFormatter(
 )
 audit_logger.addHandler(audit_handler)
 
-# -------- 在内存中存储明文密码的临时字典（启动后立即清理） --------
-_USERS_PLAIN = {
-    "admin": {
-        "username": "admin",
-        "password": "admin123",
-        "role": "admin",
-        "email": "admin@example.com",
-        "phone": "13800138000",
-        "balance": 99999,
-    },
-    "alice": {
-        "username": "alice",
-        "password": "alice2025",
-        "role": "user",
-        "email": "alice@example.com",
-        "phone": "13900139001",
-        "balance": 100,
-    },
-}
+# -------- 数据库初始化 --------
+DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "users.db")
 
-# -------- 真正的用户数据库：密码使用 bcrypt 哈希存储 --------
-USERS = {}
-for _name, _data in _USERS_PLAIN.items():
-    _entry = dict(_data)
-    _entry["password"] = generate_password_hash(_data["password"])
-    _entry["created_at"] = datetime.now().isoformat()
-    _entry["lockout_count"] = 0  # 锁定次数计数（渐进锁定用）
-    USERS[_name] = _entry
 
-# 立即清理明文密码在内存中的残留
-del _USERS_PLAIN, _name, _data, _entry
+def _init_db():
+    """初始化 SQLite 数据库，创建用户表并插入默认用户"""
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            username TEXT PRIMARY KEY,
+            password TEXT NOT NULL,
+            role TEXT NOT NULL DEFAULT 'user',
+            email TEXT NOT NULL DEFAULT '',
+            phone TEXT NOT NULL DEFAULT '',
+            balance INTEGER NOT NULL DEFAULT 0,
+            lockout_count INTEGER NOT NULL DEFAULT 0,
+            last_login TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL DEFAULT ''
+        )
+    """)
+    # 检查是否已有数据
+    c.execute("SELECT COUNT(*) FROM users")
+    if c.fetchone()[0] == 0:
+        default_users = [
+            ("admin", generate_password_hash("admin123"), "admin",
+             "admin@example.com", "13800138000", 99999, 0, "", datetime.now().isoformat()),
+            ("alice", generate_password_hash("alice2025"), "user",
+             "alice@example.com", "13900139001", 100, 0, "", datetime.now().isoformat()),
+        ]
+        c.executemany(
+            "INSERT INTO users (username, password, role, email, phone, "
+            "balance, lockout_count, last_login, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            default_users,
+        )
+    conn.commit()
+    conn.close()
+
+
+def _get_user(username):
+    """从数据库查询用户"""
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT * FROM users WHERE username = ?", (username,))
+    row = c.fetchone()
+    conn.close()
+    if row:
+        return {
+            "username": row[0],
+            "password": row[1],
+            "role": row[2],
+            "email": row[3],
+            "phone": row[4],
+            "balance": row[5],
+            "lockout_count": row[6],
+            "last_login": row[7],
+            "created_at": row[8],
+        }
+    return None
+
+
+def _user_exists(username):
+    """检查用户是否存在"""
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT 1 FROM users WHERE username = ?", (username,))
+    exists = c.fetchone() is not None
+    conn.close()
+    return exists
+
+
+def _update_user(username, **kwargs):
+    """更新用户字段"""
+    if not kwargs:
+        return
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    set_clause = ", ".join(f"{k} = ?" for k in kwargs)
+    values = list(kwargs.values()) + [username]
+    c.execute(
+        f"UPDATE users SET {set_clause} WHERE username = ?", values
+    )
+    conn.commit()
+    conn.close()
+
+
+# 启动时初始化数据库
+_init_db()
 
 
 # ============================================================
@@ -389,13 +448,14 @@ def _record_failed_attempt(ip, username):
     user_rec["count"] += 1
 
     if user_rec["count"] >= RATE_LIMIT_MAX:
-        # 获取该用户的累计锁定次数，+1 表示本次锁定
-        lockout_count = USERS.get(username, {}).get("lockout_count", 0)
+        # 从数据库获取累计锁定次数，+1 表示本次锁定
+        user_data = _get_user(username)
+        lockout_count = user_data["lockout_count"] if user_data else 0
         duration = _get_lockout_duration(lockout_count + 1)
         user_rec["locked_until"] = now + duration
-        # 增加锁定次数（持久化到 USERS）
-        if username in USERS:
-            USERS[username]["lockout_count"] = lockout_count + 1
+        # 增加锁定次数
+        if user_data:
+            _update_user(username, lockout_count=lockout_count + 1)
 
         _audit_log(
             "ACCOUNT_LOCKED",
@@ -508,8 +568,8 @@ def index():
     elif expired_code == "3":
         session_expired_reason = "登录已超过24小时，请重新登录。"
 
-    if username and username in USERS:
-        raw = USERS[username]
+    if username and _user_exists(username):
+        raw = _get_user(username)
         user_info = {k: v for k, v in raw.items() if k != "password"}
         # 添加最后登录时间
         last_login = session.get("_last_login")
@@ -592,12 +652,13 @@ def login():
         ), 423
 
     # 7. 校验密码
-    if username in USERS and check_password_hash(
-        USERS[username]["password"], password_raw
+    user_data = _get_user(username)
+    if user_data and check_password_hash(
+        user_data["password"], password_raw
     ):
         # ---- 登录成功 ----
-        # 获取上次登录时间（存储在 USERS 中持久化）
-        last_login_str = USERS[username].get("last_login", "")
+        # 获取上次登录时间（从数据库）
+        last_login_str = user_data.get("last_login", "")
 
         session.clear()  # 防 Session 固定化
         session.permanent = True
@@ -618,21 +679,20 @@ def login():
         # 记录登录时间
         now_ts = time.time()
         session["_login_time"] = now_ts
-        # 将本次登录时间存入 USERS，作为下次的"上次登录时间"
+        # 将本次登录时间写入数据库
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        USERS[username]["last_login"] = now_str
+        _update_user(username, last_login=now_str)
         # 把上次登录时间传入 session 供模板使用
         if last_login_str:
             session["_last_login"] = last_login_str
 
         # 重置该用户的锁定次数（登录成功表示恢复可信）
-        if username in USERS:
-            USERS[username]["lockout_count"] = 0
+        _update_user(username, lockout_count=0)
         _clear_login_attempts(client_ip, username)
 
         _audit_log("LOGIN_SUCCESS", username=username, ip=client_ip, result="SUCCESS")
 
-        user_info = {k: v for k, v in USERS[username].items() if k != "password"}
+        user_info = {k: v for k, v in user_data.items() if k != "password"}
         return render_template("index.html", user=user_info)
 
     # 8. 登录失败
