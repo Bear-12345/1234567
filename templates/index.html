@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+
+{% block content %}
+    {% if user %}
+        <div class="card">
+            <h1 class="card-title">欢迎回来，{{ user.username }}！</h1>
+
+            {% if user.last_login %}
+                <div class="info-banner">
+                    📅 上次登录时间：{{ user.last_login }}
+                </div>
+            {% endif %}
+
+            <div class="user-info">
+                <p><strong>用户名：</strong>{{ user.username }}</p>
+                <p><strong>邮箱：</strong>{{ user.email }}</p>
+                <p><strong>手机：</strong>{{ user.phone }}</p>
+                <p><strong>角色：</strong>
+                    {% if user.role == 'admin' %}
+                        <span class="badge badge-admin">管理员</span>
+                    {% else %}
+                        <span class="badge badge-user">普通用户</span>
+                    {% endif %}
+                </p>
+                <p><strong>余额：</strong>¥{{ user.balance }}</p>
+            </div>
+
+            <div class="action-bar">
+                <a href="/logout" class="btn btn-logout">退出登录</a>
+            </div>
+        </div>
+    {% else %}
+        <div class="card card-center">
+            <h1 class="card-title">请先登录</h1>
+            <p class="text-muted">您还没有登录，请先登录系统。</p>
+            <a href="/login" class="btn btn-primary">前往登录</a>
+        </div>
+    {% endif %}
+{% endblock %}

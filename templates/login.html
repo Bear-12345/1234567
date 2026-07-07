@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block content %}
+    <div class="card card-login">
+        <h1 class="card-title">用户登录</h1>
+
+        {% if error %}
+            <div class="alert alert-error">{{ error }}</div>
+        {% endif %}
+
+        <form action="/login" method="POST" class="login-form" autocomplete="off">
+            <!-- CSRF 令牌 -->
+            <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+
+            <!-- 蜜罐字段：对用户不可见，如果被填写说明是自动化机器人 -->
+            <div class="honeypot" aria-hidden="true">
+                <label for="_gotcha">不要填写此字段</label>
+                <input type="text" id="_gotcha" name="_gotcha" tabindex="-1" autocomplete="off">
+            </div>
+
+            <div class="form-group">
+                <label for="username">用户名</label>
+                <input type="text" id="username" name="username"
+                       placeholder="请输入用户名" required maxlength="32"
+                       autocomplete="username">
+            </div>
+            <div class="form-group">
+                <label for="password">密码</label>
+                <input type="password" id="password" name="password"
+                       placeholder="请输入密码" required maxlength="128" minlength="6"
+                       autocomplete="current-password">
+            </div>
+            <button type="submit" class="btn btn-primary btn-block">登录</button>
+        </form>
+        <p class="text-muted text-center" style="margin-top:16px;font-size:12px;">
+            ⚠️ 连续5次登录失败将临时锁定账号
+        </p>
+    </div>
+{% endblock %}
