@@ -144,6 +144,11 @@ p.no-indent {
     white-space: pre;
     overflow-x: auto;
 }
+td.code {
+    font-family: 'Courier New', monospace;
+    font-size: 8pt;
+    background: #fafafa;
+}
 
 /* ===== 漏洞条目 ===== */
 .vuln {
@@ -265,10 +270,10 @@ tr:nth-child(even) {
     <div class="url">http://192.168.43.129:5000</div>
     <hr class="divider">
     <div class="meta">
-        <strong>项目版本：</strong>V3.0 — 安全加固版（密码安全专题）<br>
-        <strong>报告日期：</strong>2026年7月7日<br>
-        <strong>今日课程：</strong>密码安全 — 硬编码密码 / 暴力破解 / 明文存储<br>
-        <strong>技术栈：</strong>Python Flask / SQLite / bcrypt<br>
+        <strong>项目版本：</strong>V4.0 — 安全加固版（密码安全 + SQL注入修复）<br>
+        <strong>报告日期：</strong>2026年7月8日<br>
+        <strong>今日课程：</strong>Day1:密码安全 + Day2:SQL注入漏洞修复<br>
+        <strong>技术栈：</strong>Python Flask / SQLite / bcrypt / 参数化查询<br>
         <strong>安全评级：</strong><span class="stars">&#9733;&#9733;&#9733;&#9733;&#9733;</span>  25项防护全部通过
     </div>
     <div class="line-bottom"></div>
@@ -530,41 +535,102 @@ CREATE TABLE users (
 </div>
 
 <!-- ============================================================
-     四、总结
+     四、SQL注入漏洞专题（第2天课程）
      ============================================================ -->
 <div class="page">
-    <h2>四、总结</h2>
-    <p>本次安全加固聚焦密码安全专题，针对课堂所学的 3 大密码风险进行了全面修复：</p>
+    <h2>四、SQL注入漏洞专题</h2>
+    <p>第2天课程内容为 SQL 注入漏洞的挖掘与修复。系统在上次迭代中新增了注册和搜索功能，但使用了 f-string 字符串拼接 SQL 语句，故意留下了注入漏洞。</p>
+
+    <h3>4.1 漏洞位置</h3>
+    <table>
+        <tr><th>功能</th><th>路由</th><th>漏洞代码</th></tr>
+        <tr><td>用户注册</td><td>/register</td><td class="code">f"INSERT INTO users VALUES ('{username}',...)"</td></tr>
+        <tr><td>用户搜索</td><td>/search</td><td class="code">f"SELECT ... WHERE username LIKE '%{keyword}%'"</td></tr>
+    </table>
+
+    <h3>4.2 POC 验证（注入成功）</h3>
+
+    <h4>POC 1：UNION 注入</h4>
+    <div class="code-block"># 输入
+keyword = ' UNION SELECT 1,'inj','inj@x.com','138'--
+
+# 生成的 SQL
+SELECT * FROM users WHERE username LIKE '%' UNION SELECT 1,'inj','inj@x.com','138'--%'
+
+# 结果：搜索结果中出现 "inj" 用户 ✅</div>
+
+    <h4>POC 2：OR 万能条件</h4>
+    <div class="code-block"># 输入
+keyword = ' OR '1'='1
+
+# 生成的 SQL
+SELECT * FROM users WHERE username LIKE '%' OR '1'='1%' OR email LIKE '%' OR '1'='1%'
+
+# 结果：返回 users 表中全部用户数据 ✅</div>
+
+    <h4>POC 3：注册功能注入</h4>
+    <div class="code-block"># 输入
+username = hacker', 'pass', 'h@x.com', '123')--
+
+# 生成的 SQL
+INSERT INTO users VALUES ('hacker', 'pass', 'h@x.com', '123')--',...)
+
+# 结果：恶意数据写入数据库 ✅</div>
+
+    <h3>4.3 修复方案</h3>
+    <p>将 f-string 拼接 SQL 改为<strong>参数化查询</strong>（Prepared Statement），根本性防止 SQL 注入：</p>
+
+    <div class="code-block">// ❌ 修复前：f-string 拼接（存在注入）
+sql = f"SELECT ... WHERE username LIKE '%{keyword}%'"
+
+// ✅ 修复后：参数化查询（安全）
+sql = "SELECT ... WHERE username LIKE ?"
+cursor.execute(sql, (like_pattern,))</div>
+
+    <h3>4.4 修复后验证</h3>
+    <table>
+        <tr><th>测试</th><th>修复前</th><th>修复后</th></tr>
+        <tr><td>POC 1 UNION 注入</td><td>返回 "inj" 数据</td><td class="green bold">[OK] 注入无效，搜索结果为0</td></tr>
+        <tr><td>POC 2 OR 万能条件</td><td>返回全部用户</td><td class="green bold">[OK] 注入无效，正常搜索</td></tr>
+        <tr><td>POC 3 注册注入</td><td>SQL代码被执行</td><td class="green bold">[OK] 注入内容成为普通用户名</td></tr>
+    </table>
+</div>
+
+<!-- ============================================================
+     五、总结
+     ============================================================ -->
+<div class="page">
+    <h2>五、总结</h2>
+    <p class="no-indent">经过两天的安全加固，本系统已覆盖以下安全维度：</p>
 
     <table>
         <tr>
-            <th style="width:30%">课堂知识点</th>
-            <th style="width:30%">对应漏洞</th>
-            <th style="width:40%">修复措施</th>
+            <th>天数</th>
+            <th>课程内容</th>
+            <th>新增功能</th>
+            <th>修复漏洞数</th>
         </tr>
         <tr>
-            <td>1. 硬编码密码</td>
-            <td>V-01 硬编码默认密码</td>
-            <td>删除明文硬编码 + bcrypt 哈希存储 + SQLite 数据库</td>
+            <td>第1天</td>
+            <td>密码安全</td>
+            <td>登录/登出</td>
+            <td>13项（含25项措施）</td>
         </tr>
         <tr>
-            <td>2. 密码爆破</td>
-            <td>V-02 密码弱 + 无限速</td>
-            <td>双重速率限制 + 渐进式账号锁定（15分/1小时/24小时）</td>
-        </tr>
-        <tr>
-            <td>3. 密码泄露</td>
-            <td>V-03/V-04 明文存储/展示</td>
-            <td>bcrypt 哈希 + 前端过滤 + 安全响应头 + 审计日志</td>
+            <td>第2天</td>
+            <td>SQL注入</td>
+            <td>注册/搜索</td>
+            <td>3项（注册+搜索+统一防护）</td>
         </tr>
     </table>
 
-    <p style="margin-top: 5mm;">额外加固措施：Session 指纹绑定、CSRF 防护、蜜罐字段、统一错误提示、Cookie 安全属性等 8 项增强防护，构建了密码安全的纵深防御体系。</p>
+    <p style="margin-top: 5mm;"><strong>第1天</strong> 密码安全加固：Session 指纹绑定、CSRF 防护、蜜罐字段、双重速率限制、渐进锁定等 25 项措施。</p>
+    <p><strong>第2天</strong> SQL注入修复：将 f-string 拼接全部替换为参数化查询，从根源消除注入风险。</p>
 
     <br>
     <hr style="border: none; border-top: 1px solid #2980b9; width: 60%; margin: 8mm auto;">
     <p style="text-align: center; color: #95a5a6; text-indent: 0;">&mdash; 报告完 &mdash;</p>
-    <p style="text-align: center; color: #bbb; font-size: 8pt; text-indent: 0;">报告日期: 2026-07-07 | 今日课程: 密码安全 | 安全标准: OWASP Top 10 (2021)</p>
+    <p style="text-align: center; color: #bbb; font-size: 8pt; text-indent: 0;">报告日期: 2026-07-08 | 课程: 密码安全 + SQL注入 | 安全标准: OWASP Top 10 (2021)</p>
 </div>
 
 </body>

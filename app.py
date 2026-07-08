@@ -97,6 +97,7 @@ ALLOWED_HOSTS = {
     "127.0.0.1:5000",
     "localhost:5000",
     "192.168.43.129:5000",
+    "10.133.24.125:5000",
     "0.0.0.0:5000",
 }
 
@@ -266,8 +267,8 @@ def _audit_log(action, username="?", ip="?", result="?", detail=""):
 def _validate_host_header():
     """检查请求的 Host 头是否在白名单中，不在则拒绝"""
     host = request.headers.get("Host", "")
-    # 开发环境：只要包含 localhost 或 127.0.0.1 或 192.168 就放行
-    if any(allowed in host for allowed in ("localhost", "127.0.0.1", "192.168.", "0.0.0.0")):
+    # 开发环境：只要包含 localhost 或 127.0.0.1 或 192.168 或 10. 就放行
+    if any(allowed in host for allowed in ("localhost", "127.0.0.1", "192.168.", "10.", "0.0.0.0")):
         return
     if host not in ALLOWED_HOSTS:
         _audit_log("HOST_REJECTED", ip=request.remote_addr, detail=f"host={host}")
@@ -777,21 +778,23 @@ def register():
     email = request.form.get("email", "")
     phone = request.form.get("phone", "")
 
-    # 使用 f-string 拼接 SQL（故意留下注入漏洞）
-    sql = f"INSERT INTO users (username, password, email, phone) VALUES ('{username}', '{password}', '{email}', '{phone}')"
-    print(f"[SQL注入演示] 注册SQL: {sql}", flush=True)
+    # 使用参数化查询修复 SQL 注入漏洞
+    sql = "INSERT INTO users (username, password, email, phone) VALUES (?, ?, ?, ?)"
+    print(f"[SQL注入修复] 注册SQL(参数化): {sql}", flush=True)
 
     try:
         conn = sqlite3.connect(VULN_DB_PATH)
         c = conn.cursor()
-        c.execute(sql)
+        c.execute(sql, (username, password, email, phone))
         conn.commit()
         conn.close()
-        print(f"[SQL注入演示] 用户 {username} 注册成功", flush=True)
+        print(f"[SQL注入修复] 用户 {username} 注册成功", flush=True)
         # 跳转到登录页并提示成功
         return redirect("/login?registered=1")
     except Exception as e:
-        print(f"[SQL注入演示] 注册失败: {e}", flush=True)
+        print(f"[SQL注入修复] 注册失败: {e}", flush=True)
+        if "UNIQUE constraint" in str(e):
+            return render_template("register.html", error="用户名已存在！")
         return render_template("register.html", error=f"注册失败: {str(e)}")
 
 
@@ -800,19 +803,20 @@ def register():
 # ============================================================
 @app.route("/search")
 def search():
-    """搜索用户 - 故意使用 f-string 拼接 SQL（演示注入漏洞）"""
+    """搜索用户 - 修复SQL注入漏洞（使用参数化查询）"""
     keyword = request.args.get("keyword", "")
     results = []
 
     if keyword:
-        # 使用 f-string 拼接 SQL（故意留下注入漏洞）
-        sql = f"SELECT id, username, email, phone FROM users WHERE username LIKE '%{keyword}%' OR email LIKE '%{keyword}%'"
-        print(f"[SQL注入演示] 搜索SQL: {sql}", flush=True)
+        # 使用参数化查询修复 SQL 注入漏洞
+        like_pattern = f"%{keyword}%"
+        sql = "SELECT id, username, email, phone FROM users WHERE username LIKE ? OR email LIKE ?"
+        print(f"[SQL注入修复] 搜索SQL(参数化): {sql}", flush=True)
 
         try:
             conn = sqlite3.connect(VULN_DB_PATH)
             c = conn.cursor()
-            c.execute(sql)
+            c.execute(sql, (like_pattern, like_pattern))
             rows = c.fetchall()
             conn.close()
 
@@ -823,7 +827,7 @@ def search():
                     "email": row[2],
                     "phone": row[3],
                 })
-            print(f"[SQL注入演示] 搜索结果: {len(results)} 条", flush=True)
+            print(f"[SQL注入修复] 搜索结果: {len(results)} 条", flush=True)
         except Exception as e:
             print(f"[SQL注入演示] 搜索出错: {e}", flush=True)
 
