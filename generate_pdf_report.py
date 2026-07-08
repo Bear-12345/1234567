@@ -332,7 +332,30 @@ sql = f"SELECT ... WHERE username LIKE '%{keyword}%'"
 sql = "SELECT ... WHERE username LIKE ?"
 cursor.execute(sql, (like_pattern,))</div>
 
-    <h3>4.4 修复后验证</h3>
+    <h3>4.3 修复前后代码对比</h3>
+    <table>
+        <tr><th style="width:15%">功能</th><th style="width:42%">修复前（f-string拼接）</th><th style="width:43%">修复后（参数化查询）</th></tr>
+        <tr>
+            <td><strong>注册</strong></td>
+            <td class="code">f"INSERT INTO users VALUES ('{username}','{password}','{email}','{phone}')"</td>
+            <td class="code">sql = "INSERT INTO users VALUES (?,?,?,?)"<br>cursor.execute(sql, (username,password,email,phone))</td>
+        </tr>
+        <tr>
+            <td><strong>搜索</strong></td>
+            <td class="code">f"SELECT ... WHERE username LIKE '%{keyword}%'"</td>
+            <td class="code">sql = "SELECT ... WHERE username LIKE ?"<br>cursor.execute(sql, (like_pattern,))</td>
+        </tr>
+    </table>
+
+    <h3>4.4 Burp Suite 测试方法</h3>
+    <p>使用 Burp Suite 抓包后修改 keyword 参数测试注入：</p>
+    <div class="code-block">1. 登录后拦截 GET /search?keyword=admin 请求
+2. 发送到 Repeater
+3. 修改 keyword 参数值测试注入：
+   admin' OR '1'='1          → 返回全部用户
+   ' UNION SELECT 1,2,3,4--  → 返回自定义数据</div>
+
+    <h3>4.5 修复后验证</h3>
     <table>
         <tr><th>测试</th><th>修复前</th><th>修复后</th></tr>
         <tr><td>POC 1 UNION 注入</td><td>返回 "inj" 数据</td><td class="green bold">[OK] 注入无效，搜索结果为0</td></tr>
@@ -346,24 +369,24 @@ cursor.execute(sql, (like_pattern,))</div>
      ============================================================ -->
 <div class="page">
     <h2>二、总结</h2>
-    <p class="no-indent">经过两天的安全加固，本系统已覆盖以下安全维度：</p>
+    <p class="no-indent">本次SQL注入漏洞修复专题，针对注册和搜索功能中的 f-string 拼接SQL漏洞进行了全面修复：</p>
 
     <table>
         <tr>
-            <th>天数</th>
             <th>课程内容</th>
-            <th>新增功能</th>
-            <th>修复漏洞数</th>
+            <th>受影响功能</th>
+            <th>漏洞类型</th>
+            <th>修复措施</th>
         </tr>
         <tr>
-            <td>第2天</td>
             <td>SQL注入</td>
-            <td>注册/搜索</td>
-            <td>3项（注册+搜索+统一防护）</td>
+            <td>注册 / 搜索</td>
+            <td>f-string拼接SQL</td>
+            <td>参数化查询(Prepared Statement)</td>
         </tr>
     </table>
 
-    <p>本次SQL注入漏洞修复专题，针对注册和搜索功能中的 f-string 拼接SQL漏洞进行了全面修复。通过参数化查询从根本上消除了SQL注入风险，并通过3个POC验证了修复效果。</p>
+    <p style="margin-top: 4mm;">核心原理：参数化查询将 SQL 语句与用户输入的数据分离，数据库先编译 SQL 结构（SELECT、INSERT 等），再将用户输入作为"纯数据"填入。即使用户输入包含恶意 SQL 代码，也不会被数据库执行，从根源消除注入风险。</p>
 
     <br>
     <hr style="border: none; border-top: 1px solid #2980b9; width: 60%; margin: 8mm auto;">
