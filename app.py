@@ -31,6 +31,10 @@
   23. ✅ 账户枚举防护（统一错误提示）
   24. ✅ 最后登录时间追踪
   25. ✅ 启动后立即清除内存中的明文密码
+  ---
+  SQL注入演示功能（课堂专用，非安全加固）：
+  - /register 注册（f-string 拼接，故意存在注入漏洞）
+  - /search 搜索（f-string 拼接，故意存在注入漏洞）
 ============================================================
 """
 
@@ -204,6 +208,43 @@ def _update_user(username, **kwargs):
 
 # 启动时初始化数据库
 _init_db()
+
+# ============================================================
+# SQL注入演示数据库（课堂专用）
+# 数据库文件保存在 data/ 目录下
+# 注意：后续注册和搜索使用 f-string 拼接，故意存在注入漏洞
+# ============================================================
+DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+os.makedirs(DATA_DIR, exist_ok=True)
+VULN_DB_PATH = os.path.join(DATA_DIR, "users.db")
+
+
+def init_db():
+    """初始化 SQL 注入演示用数据库"""
+    print(f"[SQL注入演示] 初始化数据库: {VULN_DB_PATH}", flush=True)
+    conn = sqlite3.connect(VULN_DB_PATH)
+    c = conn.cursor()
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT UNIQUE NOT NULL,
+            password TEXT NOT NULL,
+            email TEXT NOT NULL DEFAULT '',
+            phone TEXT NOT NULL DEFAULT ''
+        )
+    """)
+    # 插入默认用户（使用 INSERT OR IGNORE 防止重复）
+    c.execute("INSERT OR IGNORE INTO users (username, password, email, phone) "
+              "VALUES ('admin', 'admin123', 'admin@example.com', '13800138000')")
+    c.execute("INSERT OR IGNORE INTO users (username, password, email, phone) "
+              "VALUES ('alice', 'alice2025', 'alice@example.com', '13900139001')")
+    conn.commit()
+    conn.close()
+    print("[SQL注入演示] 默认用户已插入: admin/admin123, alice/alice2025", flush=True)
+
+
+# 启动时初始化注入演示数据库
+init_db()
 
 
 # ============================================================
@@ -609,7 +650,12 @@ def login():
             _audit_log("GET_RATE_EXCEEDED", ip=client_ip, result="RATE_LIMITED")
             return render_template("429.html"), 429
 
-        return render_template("login.html")
+        # 检查是否有注册成功的提示
+        registered_msg = None
+        if request.args.get("registered") == "1":
+            registered_msg = "注册成功，请登录。"
+
+        return render_template("login.html", registered=registered_msg)
 
     # ---- POST：处理登录 ----
     client_ip = request.remote_addr or "unknown"
@@ -710,6 +756,85 @@ def logout():
     _audit_log("LOGOUT", username=username, ip=request.remote_addr, result="SUCCESS")
     session.clear()
     return redirect("/")
+
+
+# ============================================================
+# 路由：注册（SQL注入演示 - 使用 f-string 拼接）
+# ============================================================
+@app.route("/register", methods=["GET", "POST"])
+def register():
+    """注册页面 - 故意使用 f-string 拼接 SQL（演示注入漏洞）"""
+    # 已登录用户跳转首页
+    if session.get("username"):
+        return redirect("/")
+
+    if request.method == "GET":
+        return render_template("register.html")
+
+    # POST: 获取表单数据（不做任何过滤或转义）
+    username = request.form.get("username", "")
+    password = request.form.get("password", "")
+    email = request.form.get("email", "")
+    phone = request.form.get("phone", "")
+
+    # 使用 f-string 拼接 SQL（故意留下注入漏洞）
+    sql = f"INSERT INTO users (username, password, email, phone) VALUES ('{username}', '{password}', '{email}', '{phone}')"
+    print(f"[SQL注入演示] 注册SQL: {sql}", flush=True)
+
+    try:
+        conn = sqlite3.connect(VULN_DB_PATH)
+        c = conn.cursor()
+        c.execute(sql)
+        conn.commit()
+        conn.close()
+        print(f"[SQL注入演示] 用户 {username} 注册成功", flush=True)
+        # 跳转到登录页并提示成功
+        return redirect("/login?registered=1")
+    except Exception as e:
+        print(f"[SQL注入演示] 注册失败: {e}", flush=True)
+        return render_template("register.html", error=f"注册失败: {str(e)}")
+
+
+# ============================================================
+# 路由：搜索（SQL注入演示 - 使用 f-string 拼接）
+# ============================================================
+@app.route("/search")
+def search():
+    """搜索用户 - 故意使用 f-string 拼接 SQL（演示注入漏洞）"""
+    keyword = request.args.get("keyword", "")
+    results = []
+
+    if keyword:
+        # 使用 f-string 拼接 SQL（故意留下注入漏洞）
+        sql = f"SELECT id, username, email, phone FROM users WHERE username LIKE '%{keyword}%' OR email LIKE '%{keyword}%'"
+        print(f"[SQL注入演示] 搜索SQL: {sql}", flush=True)
+
+        try:
+            conn = sqlite3.connect(VULN_DB_PATH)
+            c = conn.cursor()
+            c.execute(sql)
+            rows = c.fetchall()
+            conn.close()
+
+            for row in rows:
+                results.append({
+                    "id": row[0],
+                    "username": row[1],
+                    "email": row[2],
+                    "phone": row[3],
+                })
+            print(f"[SQL注入演示] 搜索结果: {len(results)} 条", flush=True)
+        except Exception as e:
+            print(f"[SQL注入演示] 搜索出错: {e}", flush=True)
+
+    # 获取用户信息用于首页展示
+    username = session.get("username")
+    user_info = None
+    if username and _user_exists(username):
+        raw = _get_user(username)
+        user_info = {k: v for k, v in raw.items() if k != "password"}
+
+    return render_template("index.html", user=user_info, search_results=results, keyword=keyword)
 
 
 # ============================================================

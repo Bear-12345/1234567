@@ -29,6 +29,54 @@
                 <a href="/logout" class="btn btn-logout">退出登录</a>
             </div>
         </div>
+
+        <!-- 搜索功能 -->
+        <div class="card" style="margin-top:20px;">
+            <h2 class="card-title" style="font-size:18px;">🔍 搜索用户</h2>
+            <form action="/search" method="GET" class="search-form">
+                <div class="search-group">
+                    <input type="text" id="keyword" name="keyword"
+                           placeholder="输入用户名或邮箱搜索..."
+                           value="{{ keyword or '' }}"
+                           class="search-input">
+                    <button type="submit" class="btn btn-primary">搜索</button>
+                </div>
+            </form>
+
+            {% if search_results is defined and keyword %}
+                <div class="search-results">
+                    <h3 style="margin:16px 0 8px 0;font-size:14px;color:#555;">
+                        搜索结果：共 {{ search_results|length }} 条
+                    </h3>
+
+                    {% if search_results %}
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th>ID</th>
+                                <th>用户名</th>
+                                <th>邮箱</th>
+                                <th>手机</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for r in search_results %}
+                            <tr>
+                                <td>{{ r.id }}</td>
+                                <td>{{ r.username }}</td>
+                                <td>{{ r.email }}</td>
+                                <td>{{ r.phone }}</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                    {% else %}
+                        <p class="text-muted" style="margin-top:8px;">无搜索结果</p>
+                    {% endif %}
+                </div>
+            {% endif %}
+        </div>
+
     {% else %}
         <div class="card card-center">
             <h1 class="card-title">请先登录</h1>
