@@ -298,6 +298,24 @@ a {
     color: #389e0d;
 }
 
+.upload-preview {
+    text-align: center;
+    padding: 16px;
+    margin-bottom: 16px;
+}
+
+.preview-img {
+    max-width: 200px;
+    max-height: 200px;
+    border-radius: 8px;
+    border: 2px solid #e8e8e8;
+}
+
+.upload-preview a {
+    color: #2980b9;
+    text-decoration: underline;
+}
+
 /* ===== Search ===== */
 .search-form {
     display: flex;

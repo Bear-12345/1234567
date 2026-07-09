@@ -76,7 +76,7 @@ app.config.update(
     SESSION_COOKIE_SAMESITE="Strict",  # 严格同站策略，防 CSRF（比 Lax 更严）
     SESSION_COOKIE_SECURE=False,       # 内网开发环境暂不开 HTTPS；生产务必开启
     PERMANENT_SESSION_LIFETIME=1800,   # 滑动超时：30 分钟无操作自动过期
-    MAX_CONTENT_LENGTH=16 * 1024,      # 请求体上限 16KB，防大包 DoS
+    MAX_CONTENT_LENGTH=16 * 1024 * 1024,  # 文件上传限制 16MB
 )
 
 # -------- 自定义 WSGI RequestHandler（隐藏 Server 版本） --------
@@ -96,8 +96,7 @@ _SECURE_HANDLER = _SecureRequestHandler
 ALLOWED_HOSTS = {
     "127.0.0.1:5000",
     "localhost:5000",
-    "192.168.43.129:5000",
-    "10.133.24.125:5000",
+    "10.133.25.191:5000",
     "0.0.0.0:5000",
 }
 
@@ -268,7 +267,7 @@ def _validate_host_header():
     """检查请求的 Host 头是否在白名单中，不在则拒绝"""
     host = request.headers.get("Host", "")
     # 开发环境：只要包含 localhost 或 127.0.0.1 或 192.168 或 10. 就放行
-    if any(allowed in host for allowed in ("localhost", "127.0.0.1", "192.168.", "10.", "0.0.0.0")):
+    if any(allowed in host for allowed in ("localhost", "127.0.0.1", "10.", "0.0.0.0")):
         return
     if host not in ALLOWED_HOSTS:
         _audit_log("HOST_REJECTED", ip=request.remote_addr, detail=f"host={host}")
@@ -280,8 +279,10 @@ def _validate_host_header():
 # ============================================================
 @app.before_request
 def _validate_content_type():
-    """POST 请求必须使用 form-urlencoded 格式"""
+    """POST 请求必须使用 form-urlencoded 格式（文件上传除外）"""
     if request.method == "POST":
+        if request.path == "/upload":
+            return
         ct = (request.content_type or "").lower()
         if "application/x-www-form-urlencoded" not in ct:
             _audit_log("CONTENT_TYPE_REJECTED", ip=request.remote_addr, detail=f"ct={ct}")
@@ -839,6 +840,40 @@ def search():
         user_info = {k: v for k, v in raw.items() if k != "password"}
 
     return render_template("index.html", user=user_info, search_results=results, keyword=keyword)
+
+
+# ============================================================
+# 路由：文件上传
+# ============================================================
+UPLOAD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "uploads")
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+
+
+@app.route("/upload", methods=["GET", "POST"])
+@login_required
+def upload():
+    """文件上传 - 使用原始文件名保存，不做任何类型检查"""
+    if request.method == "GET":
+        return render_template("upload.html")
+
+    # POST: 处理上传
+    if "file" not in request.files:
+        return render_template("upload.html", error="未选择文件")
+
+    file = request.files["file"]
+    if file.filename == "":
+        return render_template("upload.html", error="未选择文件")
+
+    # 使用用户提供的原始文件名保存（不做任何校验）
+    filename = file.filename
+    filepath = os.path.join(UPLOAD_DIR, filename)
+    file.save(filepath)
+
+    # 生成文件访问 URL
+    file_url = f"/static/uploads/{filename}"
+    print(f"[文件上传] 用户 {session['username']} 上传文件: {filename}", flush=True)
+
+    return render_template("upload.html", success=True, file_url=file_url, filename=filename)
 
 
 # ============================================================
