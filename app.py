@@ -40,6 +40,7 @@
 
 import os
 import re
+import uuid
 import time
 import hmac
 import sqlite3
@@ -843,16 +844,26 @@ def search():
 
 
 # ============================================================
-# 路由：文件上传
+# 路由：文件上传（已修复 — 安全版）
 # ============================================================
 UPLOAD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "uploads")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
+
+# 允许的文件类型白名单
+ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg", "gif", "webp"}
+# 允许的 MIME 类型白名单
+ALLOWED_MIMETYPES = {"image/png", "image/jpeg", "image/gif", "image/webp"}
+
+
+def _allowed_file(filename):
+    """检查文件后缀是否在白名单内"""
+    return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
 
 
 @app.route("/upload", methods=["GET", "POST"])
 @login_required
 def upload():
-    """文件上传 - 使用原始文件名保存，不做任何类型检查"""
+    """文件上传 - 已修复（后缀校验 + MIME校验 + UUID重命名）"""
     if request.method == "GET":
         return render_template("upload.html")
 
@@ -864,16 +875,42 @@ def upload():
     if file.filename == "":
         return render_template("upload.html", error="未选择文件")
 
-    # 使用用户提供的原始文件名保存（不做任何校验）
-    filename = file.filename
-    filepath = os.path.join(UPLOAD_DIR, filename)
+    # 1. 检查文件后缀
+    if not _allowed_file(file.filename):
+        print(f"[文件上传] 拦截非法后缀: {file.filename}", flush=True)
+        return render_template("upload.html", error="不支持的文件类型，仅允许上传图片文件")
+
+    # 2. 检查 MIME 类型
+    mime_type = file.content_type or ""
+    if mime_type not in ALLOWED_MIMETYPES:
+        print(f"[文件上传] 拦截非法MIME: {file.filename} -> {mime_type}", flush=True)
+        return render_template("upload.html", error="不支持的文件类型，仅允许上传图片文件")
+
+    # 3. 读取文件内容并验证是否为真实图片（检查文件头魔数）
+    file.seek(0)
+    header = file.read(8)
+    file.seek(0)
+    is_valid_image = (
+        header[:4] == b"\x89PNG" or          # PNG
+        header[:2] in (b"\xff\xd8",) or      # JPEG
+        header[:3] == b"GIF" or              # GIF
+        header[:4] == b"RIFF"                 # WEBP (RIFF....WEBP)
+    )
+    if not is_valid_image:
+        print(f"[文件上传] 拦截非图片内容: {file.filename}", flush=True)
+        return render_template("upload.html", error="文件内容不是有效的图片格式")
+
+    # 4. 使用 UUID 重命名文件（防止路径穿越和文件名冲突）
+    ext = file.filename.rsplit(".", 1)[1].lower()
+    safe_filename = f"{uuid.uuid4().hex}.{ext}"
+    filepath = os.path.join(UPLOAD_DIR, safe_filename)
     file.save(filepath)
 
     # 生成文件访问 URL
-    file_url = f"/static/uploads/{filename}"
-    print(f"[文件上传] 用户 {session['username']} 上传文件: {filename}", flush=True)
+    file_url = f"/static/uploads/{safe_filename}"
+    print(f"[文件上传] 用户 {session['username']} 上传文件: {file.filename} -> {safe_filename}", flush=True)
 
-    return render_template("upload.html", success=True, file_url=file_url, filename=filename)
+    return render_template("upload.html", success=True, file_url=file_url, filename=safe_filename)
 
 
 # ============================================================
