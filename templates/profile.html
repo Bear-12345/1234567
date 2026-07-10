@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+
+{% block content %}
+    <div class="card">
+        <h1 class="card-title">个人中心</h1>
+
+        {% if error %}
+            <div class="alert alert-error">{{ error }}</div>
+        {% endif %}
+
+        {% if user %}
+            <div class="user-info">
+                <p><strong>ID：</strong>{{ user.id }}</p>
+                <p><strong>用户名：</strong>{{ user.username }}</p>
+                <p><strong>邮箱：</strong>{{ user.email }}</p>
+                <p><strong>手机：</strong>{{ user.phone }}</p>
+                <p><strong>余额：</strong><span class="balance">¥{{ user.balance }}</span></p>
+            </div>
+
+            <div class="card" style="margin-top:20px;padding:20px;">
+                <h2 style="font-size:16px;margin-bottom:12px;color:#2c3e50;">充值</h2>
+                <form action="/recharge" method="POST" class="login-form">
+                    <input type="hidden" name="user_id" value="{{ user.id }}">
+                    <div class="form-group">
+                        <label for="amount">充值金额</label>
+                        <input type="number" id="amount" name="amount" placeholder="输入金额" required>
+                    </div>
+                    <button type="submit" class="btn btn-primary btn-block">确认充值</button>
+                </form>
+            </div>
+        {% else %}
+            <p class="text-muted">用户不存在</p>
+        {% endif %}
+    </div>
+{% endblock %}

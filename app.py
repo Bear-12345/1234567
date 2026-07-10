@@ -240,8 +240,42 @@ def init_db():
     c.execute("INSERT OR IGNORE INTO users (username, password, email, phone) "
               "VALUES ('alice', 'alice2025', 'alice@example.com', '13900139001')")
     conn.commit()
+
+    # 添加余额字段（兼容旧表）
+    try:
+        c.execute("ALTER TABLE users ADD COLUMN balance INTEGER NOT NULL DEFAULT 0")
+    except Exception:
+        pass  # 字段已存在则忽略
+    try:
+        c.execute("UPDATE users SET balance = 99999 WHERE username = 'admin' AND balance IS NULL")
+        c.execute("UPDATE users SET balance = 100 WHERE username = 'alice' AND balance IS NULL")
+    except Exception:
+        pass
+
+    conn.commit()
     conn.close()
-    print("[SQL注入演示] 默认用户已插入: admin/admin123, alice/alice2025", flush=True)
+    print("[SQL注入演示] 默认用户已插入: admin/admin123, alice/alice2025, 余额已初始化", flush=True)
+
+
+def _get_user_by_id(user_id):
+    """根据 ID 查询用户（从演示数据库）"""
+    conn = sqlite3.connect(VULN_DB_PATH)
+    c = conn.cursor()
+    try:
+        c.execute(f"SELECT id, username, email, phone, balance FROM users WHERE id = {user_id}")
+        row = c.fetchone()
+        conn.close()
+        if row:
+            return {
+                "id": row[0],
+                "username": row[1],
+                "email": row[2],
+                "phone": row[3],
+                "balance": row[4],
+            }
+    except Exception:
+        conn.close()
+    return None
 
 
 # 启动时初始化注入演示数据库
@@ -858,6 +892,54 @@ ALLOWED_MIMETYPES = {"image/png", "image/jpeg", "image/gif", "image/webp"}
 def _allowed_file(filename):
     """检查文件后缀是否在白名单内"""
     return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
+
+
+# ============================================================
+# 路由：个人中心（存在 IDOR 权限提升漏洞）
+# ============================================================
+@app.route("/profile")
+@login_required
+def profile():
+    """个人中心 - user_id 从 URL 参数获取，不验证权限"""
+    user_id = request.args.get("user_id", "")
+    if not user_id:
+        return render_template("profile.html", error="缺少用户ID")
+
+    # 直接根据 URL 参数查询，不验证登录用户身份
+    user = _get_user_by_id(user_id)
+    if not user:
+        return render_template("profile.html", error="用户不存在")
+
+    return render_template("profile.html", user=user)
+
+
+# ============================================================
+# 路由：充值（存在业务逻辑漏洞 - 金额可为负）
+# ============================================================
+@app.route("/recharge", methods=["POST"])
+@login_required
+def recharge():
+    """充值 - 直接拼接 SQL，amount 不做正负校验"""
+    user_id = request.form.get("user_id", "")
+    amount = request.form.get("amount", "0")
+
+    try:
+        user_id = int(user_id)
+        amount = int(amount)
+    except (ValueError, TypeError):
+        return render_template("profile.html", error="参数格式错误")
+
+    # 直接拼接 SQL 更新余额（不校验 amount 正负）
+    conn = sqlite3.connect(VULN_DB_PATH)
+    c = conn.cursor()
+    sql = f"UPDATE users SET balance = balance + {amount} WHERE id = {user_id}"
+    print(f"[业务逻辑漏洞] 执行SQL: {sql}", flush=True)
+    c.execute(sql)
+    conn.commit()
+    conn.close()
+
+    print(f"[业务逻辑漏洞] 用户ID {user_id} 余额变动: {amount:+d}", flush=True)
+    return redirect(f"/profile?user_id={user_id}")
 
 
 @app.route("/upload", methods=["GET", "POST"])

@@ -316,6 +316,12 @@ a {
     text-decoration: underline;
 }
 
+.balance {
+    color: #27ae60;
+    font-weight: bold;
+    font-size: 16px;
+}
+
 /* ===== Search ===== */
 .search-form {
     display: flex;
