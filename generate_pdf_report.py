@@ -270,59 +270,51 @@ tr:nth-child(even) {
     <div class="url">http://10.133.25.191:5000</div>
     <hr class="divider">
     <div class="meta">
-        <strong>项目版本：</strong>V5.0 — 文件上传漏洞修复专题<br>
-        <strong>报告日期：</strong>2026年7月9日<br>
-        <strong>今日课程：</strong>Day3:文件上传漏洞深度解析与安全防护<br>
-        <strong>技术栈：</strong>Python Flask / 文件上传 / 魔数校验 / UUID重命名<br>
+        <strong>项目版本：</strong>V6.0 — 权限提升 + 业务逻辑漏洞专题<br>
+        <strong>报告日期：</strong>2026年7月10日<br>
+        <strong>今日课程：</strong>Day4:权限提升与业务逻辑漏洞<br>
+        <strong>技术栈：</strong>Python Flask / IDOR / 余额操作 / SQL注入<br>
     </div>
     <div class="line-bottom"></div>
 </div>
 
 <!-- ============================================================
-     一、漏洞分析（文件上传）
+     一、漏洞分析
      ============================================================ -->
 <div class="page">
-    <h2>一、漏洞分析（文件上传）</h2>
-    <p>在已完成的用户管理系统中新增了头像上传功能。由于最初未做任何安全校验，存在以下4个严重漏洞：</p>
+    <h2>一、漏洞分析</h2>
+    <p>在已有功能基础上新增了个人中心和充值功能，由于未做权限校验和业务逻辑检查，存在2个严重漏洞。</p>
 
-    <h3>1.1 漏洞位置</h3>
+    <h3>1.1 新增功能</h3>
     <table>
-        <tr><th>功能</th><th>路由</th><th>漏洞代码</th></tr>
-        <tr><td>头像上传</td><td>/upload</td><td class="code">file.save(os.path.join(UPLOAD_DIR, file.filename))</td></tr>
+        <tr><th>功能</th><th>路由</th><th>说明</th></tr>
+        <tr><td>个人中心</td><td>/profile?user_id=X</td><td>查看用户资料，user_id来源于URL参数</td></tr>
+        <tr><td>充值</td><td>/recharge</td><td>修改余额，amount来源于表单参数</td></tr>
     </table>
 
-    <h3>1.2 POC 验证</h3>
+    <h3>1.2 漏洞1：IDOR（权限提升）</h3>
+    <p class="red bold">风险等级：高危</p>
+    <p>个人中心从 URL 参数获取 user_id，但未验证当前登录用户与查询的 user_id 是否匹配。</p>
+    <div class="code-block">// 漏洞代码
+user_id = request.args.get("user_id")
+user = _get_user_by_id(user_id)  // 直接查询，不验证身份
 
-    <h4>POC 1：上传 PHP Webshell（高危）</h4>
-    <div class="code-block"># 上传一个PHP一句话木马
-echo '&lt;?php system($_GET["cmd"]); ?>' > shell.php
-curl -F "file=@shell.php" http://目标/upload
+// 攻击方法：修改URL参数
+/profile?user_id=1  // 查看admin的资料
+/profile?user_id=2  // 查看alice的资料（越权！）
+/profile?user_id=3  // 查看任意注册用户的资料</div>
 
-# 访问上传后的文件执行命令
-curl http://目标/static/uploads/shell.php?cmd=id
+    <h3>1.3 漏洞2：业务逻辑漏洞（金额为负）</h3>
+    <p class="red bold">风险等级：高危</p>
+    <p>充值接口直接拼接 SQL 更新余额，但未校验 amount 的正负。攻击者可填写负数实现盗刷。</p>
+    <div class="code-block">// 漏洞代码
+sql = f"UPDATE users SET balance = balance + {amount} WHERE id = {user_id}"
+// 没有检查 amount 是否 > 0
 
-# 结果：成功执行系统命令 ✅</div>
-
-    <h4>POC 2：上传 HTML 恶意页面（高危）</h4>
-    <div class="code-block"># 上传包含XSS的HTML文件
-echo '&lt;script>alert(document.cookie)&lt;/script>' > xss.html
-curl -F "file=@xss.html" http://目标/upload
-
-# 用户访问该HTML时，XSS脚本被执行
-# 结果：HTML文件可被直接访问 ✅</div>
-
-    <h4>POC 3：路径穿越攻击（中危）</h4>
-    <div class="code-block"># 文件名包含 ../ 可穿越到其他目录
-curl -F "file=@test.txt;filename=../../evil.txt" http://目标/upload
-
-# 结果：文件被保存到上层目录 ✅</div>
-
-    <h4>POC 4：超大型文件上传（中危）</h4>
-    <div class="code-block"># 上传超过限制的大文件
-dd if=/dev/zero of=bigfile.bin bs=1M count=20
-curl -F "file=@bigfile.bin" http://目标/upload
-
-# 结果：耗尽服务器磁盘空间 ✅</div>
+// 攻击方法：提交负值
+POST /recharge
+user_id=1&amount=-100000  // 余额减少10万！
+user_id=2&amount=999999   // 给alice加钱</div>
 </div>
 
 <!-- ============================================================
@@ -330,81 +322,56 @@ curl -F "file=@bigfile.bin" http://目标/upload
      ============================================================ -->
 <div class="page">
     <h2>二、修复方案</h2>
-    <p>针对上述4个漏洞，实施以下4层防护措施：</p>
 
-    <h3>2.1 后缀名白名单</h3>
-    <div class="code-block"># 只允许图片后缀
-ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg", "gif", "webp"}
+    <h3>2.1 修复IDOR漏洞</h3>
+    <p>从 session 获取当前用户，不允许查询其他用户资料：</p>
+    <div class="code-block">// 修复后：从session获取当前用户
+@app.route("/profile")
+@login_required
+def profile():
+    username = session.get("username")
+    user = _get_user(username)  // 只能查自己
+    return render_template("profile.html", user=user)</div>
 
-# 校验逻辑
-if "." not in filename or ext not in ALLOWED_EXTENSIONS:
-    return "不支持的文件类型"</div>
+    <h3>2.2 修复业务逻辑漏洞</h3>
+    <p>检查金额必须为正数，使用参数化查询：</p>
+    <div class="code-block">// 修复后：校验金额正负
+amount = int(request.form.get("amount", "0"))
+if amount <= 0:
+    return "金额必须为正数"
 
-    <h3>2.2 MIME 类型校验</h3>
-    <div class="code-block"># 只允许图片MIME
-ALLOWED_MIMETYPES = {"image/png", "image/jpeg", "image/gif", "image/webp"}
-
-# 校验逻辑
-if file.content_type not in ALLOWED_MIMETYPES:
-    return "不支持的文件类型"</div>
-
-    <h3>2.3 文件头魔数校验</h3>
-    <div class="code-block"># 读取文件头部字节验证真实格式
-header = file.read(8)
-is_valid = (
-    header[:4] == b"\x89PNG" or      # PNG
-    header[:2] in (b"\xff\xd8",) or  # JPEG
-    header[:3] == b"GIF" or            # GIF
-    header[:4] == b"RIFF"              # WEBP
-)
-if not is_valid:
-    return "文件内容不是有效图片"</div>
-
-    <h3>2.4 UUID 重命名防路径穿越</h3>
-    <div class="code-block"># 使用UUID重命名文件，彻底杜绝路径穿越
-import uuid
-safe_filename = f"{uuid.uuid4().hex}.{ext}"
-filepath = os.path.join(UPLOAD_DIR, safe_filename)
-file.save(filepath)</div>
+// 使用参数化查询
+c.execute("UPDATE users SET balance = balance + ? WHERE username = ?",
+          (amount, session["username"]))</div>
 </div>
 
 <!-- ============================================================
-     三、修复前后对比
+     三、POC验证结果
      ============================================================ -->
 <div class="page">
-    <h2>三、修复前后对比</h2>
+    <h2>三、POC验证结果</h2>
 
     <table>
-        <tr><th style="width:18%">防护层</th><th style="width:41%">修复前</th><th style="width:41%">修复后</th></tr>
+        <tr><th style="width:15%">POC</th><th style="width:35%">测试方法</th><th style="width:25%">修复前结果</th><th style="width:25%">修复后</th></tr>
         <tr>
-            <td><strong>后缀校验</strong></td>
-            <td class="code">无校验，任意后缀均可上传</td>
-            <td class="code">白名单: png/jpg/jpeg/gif/webp</td>
+            <td><strong>IDOR</strong></td>
+            <td>登录admin后访问/profile?user_id=2</td>
+            <td class="red bold">查到alice的资料 ✅</td>
+            <td class="green bold">只能查自己</td>
         </tr>
         <tr>
-            <td><strong>MIME校验</strong></td>
-            <td class="code">无校验</td>
-            <td class="code">仅允许image/*类型</td>
-        </tr>
-        <tr>
-            <td><strong>内容校验</strong></td>
-            <td class="code">无校验</td>
-            <td class="code">读取文件头魔数验证真实格式</td>
-        </tr>
-        <tr>
-            <td><strong>文件命名</strong></td>
-            <td class="code">原始文件名，可路径穿越</td>
-            <td class="code">UUID重命名，防穿越</td>
+            <td><strong>负值充值</strong></td>
+            <td>POST amount=-100000</td>
+            <td class="red bold">余额减少10万 ✅</td>
+            <td class="green bold">拦截负值</td>
         </tr>
     </table>
 
-    <h3>修复后验证结果</h3>
-    <table>
-        <tr><th>POC测试</th><th>修复前</th><th>修复后</th></tr>
-        <tr><td>PHP webshell</td><td>上传成功并可访问</td><td class="green bold">[OK] 拦截非法后缀</td></tr>
-        <tr><td>HTML恶意页面</td><td>上传成功并可访问</td><td class="green bold">[OK] 拦截非法后缀</td></tr>
-        <tr><td>正常JPG图片</td><td>上传成功</td><td class="green bold">[OK] UUID重命名保存</td></tr>
-    </table>
+    <h3>服务端日志记录</h3>
+    <div class="code-block">[业务逻辑漏洞] 执行SQL: UPDATE users SET balance = balance + 500 WHERE id = 1
+[业务逻辑漏洞] 用户ID 1 余额变动: +500
+[业务逻辑漏洞] 执行SQL: UPDATE users SET balance = balance + -100000 WHERE id = 1
+[业务逻辑漏洞] 用户ID 1 余额变动: -100000</div>
 </div>
 
 <!-- ============================================================
@@ -412,22 +379,31 @@ file.save(filepath)</div>
      ============================================================ -->
 <div class="page">
     <h2>四、总结</h2>
-    <p class="no-indent">文件上传漏洞是Web安全中的经典高风险漏洞，本次修复采用了"纵深防御"策略：</p>
 
     <table>
-        <tr><th>防御层次</th><th>防御手段</th><th>防范的威胁</th></tr>
-        <tr><td>第1层</td><td>后缀白名单</td><td>阻止 .php .exe .html 等非图片文件</td></tr>
-        <tr><td>第2层</td><td>MIME校验</td><td>阻止 Content-Type 伪造的攻击文件</td></tr>
-        <tr><td>第3层</td><td>文件头魔数校验</td><td>阻止改后缀名的虚假图片</td></tr>
-        <tr><td>第4层</td><td>UUID重命名</td><td>阻止路径穿越和文件名冲突</td></tr>
+        <tr><th>漏洞类型</th><th>根因</th><th>修复方案</th></tr>
+        <tr>
+            <td>IDOR（权限提升）</td>
+            <td>未验证user_id归属</td>
+            <td>从session获取用户身份，而非URL参数</td>
+        </tr>
+        <tr>
+            <td>业务逻辑漏洞</td>
+            <td>未校验金额正负 + 拼接SQL</td>
+            <td>金额>0校验 + 参数化查询</td>
+        </tr>
     </table>
 
-    <p style="margin-top: 4mm;">核心安全原则：永远不要信任用户输入。文件名、后缀、MIME类型、文件内容都需要层层校验，缺一不可。</p>
+    <p style="margin-top: 4mm;">核心安全原则：</p>
+    <p>1. 永远不要信任前端传入的用户标识（user_id应从session获取）</p>
+    <p>2. 所有业务操作必须做权限校验（用户只能操作自己的数据）</p>
+    <p>3. 数值型字段必须校验范围（金额不能为负）</p>
+    <p>4. 所有SQL必须使用参数化查询</p>
 
     <br>
     <hr style="border: none; border-top: 1px solid #2980b9; width: 60%; margin: 8mm auto;">
     <p style="text-align: center; color: #95a5a6; text-indent: 0;">&mdash; 报告完 &mdash;</p>
-    <p style="text-align: center; color: #bbb; font-size: 8pt; text-indent: 0;">报告日期: 2026-07-09 | 课程: 文件上传漏洞 | 防御策略: 纵深防御</p>
+    <p style="text-align: center; color: #bbb; font-size: 8pt; text-indent: 0;">报告日期: 2026-07-10 | 课程: 权限提升 + 业务逻辑 | OWASP Top 10: A01/Broken Access Control</p>
 </div>
 </body>
 </html>
