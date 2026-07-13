@@ -97,7 +97,7 @@ _SECURE_HANDLER = _SecureRequestHandler
 ALLOWED_HOSTS = {
     "127.0.0.1:5000",
     "localhost:5000",
-    "10.133.25.191:5000",
+    "10.133.25.94:5000",
     "0.0.0.0:5000",
 }
 
@@ -1016,6 +1016,67 @@ def upload():
     print(f"[文件上传] 用户 {session['username']} 上传文件: {file.filename} -> {safe_filename}", flush=True)
 
     return render_template("upload.html", success=True, file_url=file_url, filename=safe_filename)
+
+
+# ============================================================
+# 路由：动态页面加载（存在 LFI 路径遍历漏洞）
+# ============================================================
+PAGES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pages")
+
+
+@app.route("/page")
+def dynamic_page():
+    """动态页面加载 - 直接拼接用户输入，不做路径校验（存在LFI漏洞）"""
+    name = request.args.get("name", "")
+
+    if not name:
+        # 获取用户信息
+        username = session.get("username")
+        user_info = None
+        if username:
+            user = _get_user(username)
+            if user:
+                user_info = {k: v for k, v in user.items() if k != "password"}
+        return render_template("index.html", user=user_info, page_content=None, page_title=None, page_error="请指定页面名称")
+
+    # 直接拼接用户输入的 name 到路径中（不校验 ../）
+    file_path = os.path.join(PAGES_DIR, name)
+    print(f"[LFI漏洞] 用户请求页面: {name}", flush=True)
+    print(f"[LFI漏洞] 拼接后路径: {file_path}", flush=True)
+
+    # 尝试直接读取
+    if os.path.exists(file_path) and os.path.isfile(file_path):
+        with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+            content = f.read()
+        username = session.get("username")
+        user_info = None
+        if username:
+            user = _get_user(username)
+            if user:
+                user_info = {k: v for k, v in user.items() if k != "password"}
+        return render_template("index.html", user=user_info, page_content=content, page_title=name, page_error=None)
+
+    # 尝试加上 .html 后缀
+    html_path = file_path + ".html"
+    if os.path.exists(html_path) and os.path.isfile(html_path):
+        with open(html_path, "r", encoding="utf-8", errors="ignore") as f:
+            content = f.read()
+        username = session.get("username")
+        user_info = None
+        if username:
+            user = _get_user(username)
+            if user:
+                user_info = {k: v for k, v in user.items() if k != "password"}
+        return render_template("index.html", user=user_info, page_content=content, page_title=name, page_error=None)
+
+    # 文件不存在
+    username = session.get("username")
+    user_info = None
+    if username:
+        user = _get_user(username)
+        if user:
+            user_info = {k: v for k, v in user.items() if k != "password"}
+    return render_template("index.html", user=user_info, page_content=None, page_title=None, page_error="页面不存在")
 
 
 # ============================================================

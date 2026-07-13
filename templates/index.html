@@ -1,7 +1,23 @@
 {% extends "base.html" %}
 
 {% block content %}
-    {% if user %}
+    {% if page_content %}
+        <!-- 动态页面内容 -->
+        <div class="card">
+            <div class="action-bar" style="margin-bottom:12px;">
+                <a href="/" class="btn" style="background:#95a5a6;color:white;padding:4px 12px;font-size:12px;">← 返回首页</a>
+            </div>
+            <div class="page-content">
+                {{ page_content | safe }}
+            </div>
+        </div>
+    {% elif page_error %}
+        <div class="card card-center">
+            <h1 class="card-title">😕 {{ page_error }}</h1>
+            <p class="text-muted">请检查页面名称是否正确。</p>
+            <a href="/" class="btn btn-primary" style="margin-top:12px;">返回首页</a>
+        </div>
+    {% elif user %}
         <div class="card">
             <h1 class="card-title">欢迎回来，{{ user.username }}！</h1>
 
@@ -28,6 +44,7 @@
             <div class="action-bar">
                 <a href="/profile" class="btn btn-primary" style="background:#2980b9;">个人中心</a>
                 <a href="/upload" class="btn btn-primary" style="background:#27ae60;">上传头像</a>
+                <a href="/page?name=help" class="btn btn-primary" style="background:#8e44ad;">帮助中心</a>
                 <a href="/logout" class="btn btn-logout">退出登录</a>
             </div>
         </div>
