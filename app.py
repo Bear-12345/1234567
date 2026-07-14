@@ -97,7 +97,7 @@ _SECURE_HANDLER = _SecureRequestHandler
 ALLOWED_HOSTS = {
     "127.0.0.1:5000",
     "localhost:5000",
-    "10.133.25.94:5000",
+    "10.133.25.156:5000",
     "0.0.0.0:5000",
 }
 
@@ -1077,6 +1077,47 @@ def dynamic_page():
         if user:
             user_info = {k: v for k, v in user.items() if k != "password"}
     return render_template("index.html", user=user_info, page_content=None, page_title=None, page_error="页面不存在")
+
+
+# ============================================================
+# 路由：修改密码（存在 CSRF + 越权漏洞）
+# ============================================================
+@app.route("/change-password", methods=["POST"])
+@login_required
+def change_password():
+    """修改密码 - 不验证原密码、不验证CSRF、可修改任意用户密码"""
+    username = request.form.get("username", "")
+    new_password = request.form.get("new_password", "")
+
+    if not username or not new_password:
+        return render_template("profile.html", error="用户名和密码不能为空")
+
+    # 直接更新密码，不验证原密码，不验证session是否匹配
+    # 更新演示数据库（明文存储）
+    try:
+        conn = sqlite3.connect(VULN_DB_PATH)
+        c = conn.cursor()
+        sql = f"UPDATE users SET password = '{new_password}' WHERE username = '{username}'"
+        print(f"[CSRF漏洞] 修改密码SQL: {sql}", flush=True)
+        c.execute(sql)
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"[CSRF漏洞] 更新演示库失败: {e}", flush=True)
+
+    # 更新主数据库（使用哈希存储，保持登录可用）
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        hashed = generate_password_hash(new_password)
+        c.execute("UPDATE users SET password = ? WHERE username = ?", (hashed, username))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"[CSRF漏洞] 更新主库失败: {e}", flush=True)
+
+    print(f"[CSRF漏洞] 用户 {session['username']} 将 {username} 的密码修改为 {new_password}", flush=True)
+    return redirect("/profile")
 
 
 # ============================================================
