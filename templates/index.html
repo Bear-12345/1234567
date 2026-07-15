@@ -96,6 +96,33 @@
             {% endif %}
         </div>
 
+        <!-- URL抓取功能 -->
+        <div class="card" style="margin-top:20px;">
+            <h2 class="card-title" style="font-size:18px;">🌐 URL抓取</h2>
+            <form action="/fetch-url" method="POST" class="search-form">
+                <div class="search-group">
+                    <input type="url" id="url" name="url"
+                           placeholder="输入要抓取的URL（如 http://example.com）..."
+                           value="{{ fetch_url or '' }}"
+                           class="search-input" required>
+                    <button type="submit" class="btn btn-primary">抓取</button>
+                </div>
+            </form>
+
+            {% if fetch_error %}
+                <div class="alert alert-error" style="margin-top:12px;">{{ fetch_error }}</div>
+            {% endif %}
+
+            {% if fetch_result %}
+                <div class="fetch-results" style="margin-top:12px;">
+                    <h3 style="font-size:14px;color:#555;margin-bottom:6px;">
+                        状态码：<span class="{% if fetch_status and fetch_status < 400 %}green{% else %}red{% endif %} bold">{{ fetch_status }}</span>
+                    </h3>
+                    <pre class="fetch-content">{{ fetch_result }}</pre>
+                </div>
+            {% endif %}
+        </div>
+
     {% else %}
         <div class="card card-center">
             <h1 class="card-title">请先登录</h1>

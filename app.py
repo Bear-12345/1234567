@@ -46,6 +46,8 @@ import hmac
 import sqlite3
 import logging
 import secrets
+import urllib.request
+import urllib.error
 from functools import wraps
 from datetime import datetime
 from logging.handlers import RotatingFileHandler
@@ -1118,6 +1120,51 @@ def change_password():
 
     print(f"[CSRF漏洞] 用户 {session['username']} 将 {username} 的密码修改为 {new_password}", flush=True)
     return redirect("/profile")
+
+
+# ============================================================
+# 路由：URL抓取（存在 SSRF 漏洞）
+# ============================================================
+@app.route("/fetch-url", methods=["POST"])
+@login_required
+def fetch_url():
+    """URL抓取 - 不做任何限制，存在SSRF漏洞"""
+    target_url = request.form.get("url", "")
+
+    username = session.get("username")
+    user_info = None
+    if username:
+        user = _get_user(username)
+        if user:
+            user_info = {k: v for k, v in user.items() if k != "password"}
+
+    if not target_url:
+        return render_template("index.html", user=user_info, fetch_error="请输入URL")
+
+    print(f"[SSRF漏洞] 用户 {username} 请求抓取URL: {target_url}", flush=True)
+
+    try:
+        resp = urllib.request.urlopen(target_url, timeout=10)
+        status_code = resp.getcode()
+        content = resp.read().decode("utf-8", errors="ignore")
+        resp.close()
+
+        if len(content) > 5000:
+            content = content[:5000] + "\n\n... (内容过长，仅显示前5000字符)"
+
+        print(f"[SSRF漏洞] 抓取成功: {target_url} -> 状态码{status_code}", flush=True)
+
+        return render_template(
+            "index.html", user=user_info,
+            fetch_result=content, fetch_status=status_code,
+            fetch_url=target_url, fetch_error=None
+        )
+    except urllib.error.HTTPError as e:
+        return render_template("index.html", user=user_info, fetch_error=f"HTTP错误: {e.code}", fetch_url=target_url)
+    except urllib.error.URLError as e:
+        return render_template("index.html", user=user_info, fetch_error=f"URL访问失败: {e.reason}", fetch_url=target_url)
+    except Exception as e:
+        return render_template("index.html", user=user_info, fetch_error=f"抓取失败: {str(e)}", fetch_url=target_url)
 
 
 # ============================================================

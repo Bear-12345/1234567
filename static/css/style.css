@@ -339,6 +339,26 @@ a {
     font-family: 'Courier New', monospace;
 }
 
+/* ===== Fetch Results ===== */
+.fetch-content {
+    background: #1e1e1e;
+    color: #f0f0f0;
+    padding: 12px;
+    border-radius: 4px;
+    font-family: 'Courier New', monospace;
+    font-size: 11px;
+    line-height: 1.5;
+    overflow-x: auto;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    max-height: 400px;
+    overflow-y: auto;
+}
+
+.fetch-results {
+    margin-top: 8px;
+}
+
 .upload-preview {
     text-align: center;
     padding: 16px;
