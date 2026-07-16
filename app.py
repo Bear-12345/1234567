@@ -46,6 +46,8 @@ import hmac
 import sqlite3
 import logging
 import secrets
+import subprocess
+import platform
 import urllib.request
 import urllib.error
 from functools import wraps
@@ -99,7 +101,7 @@ _SECURE_HANDLER = _SecureRequestHandler
 ALLOWED_HOSTS = {
     "127.0.0.1:5000",
     "localhost:5000",
-    "10.133.25.156:5000",
+    "10.133.25.61:5000",
     "0.0.0.0:5000",
 }
 
@@ -1165,6 +1167,50 @@ def fetch_url():
         return render_template("index.html", user=user_info, fetch_error=f"URL访问失败: {e.reason}", fetch_url=target_url)
     except Exception as e:
         return render_template("index.html", user=user_info, fetch_error=f"抓取失败: {str(e)}", fetch_url=target_url)
+
+
+# ============================================================
+# 路由：Ping网络诊断（存在命令注入漏洞）
+# ============================================================
+@app.route("/ping", methods=["GET", "POST"])
+@login_required
+def ping():
+    """Ping测试 - 使用f-string拼接命令，存在命令注入漏洞"""
+    username = session.get("username")
+    user_info = None
+    if username:
+        user = _get_user(username)
+        if user:
+            user_info = {k: v for k, v in user.items() if k != "password"}
+
+    if request.method == "GET":
+        return render_template("ping.html")
+
+    # POST: 执行Ping命令
+    ip = request.form.get("ip", "")
+
+    if not ip:
+        return render_template("ping.html", output="请输入IP地址", error=True)
+
+    # 使用f-string拼接系统命令（不校验输入，存在命令注入漏洞）
+    command = f"ping -c 3 {ip}"
+    print(f"[命令注入漏洞] 用户 {username} 执行命令: {command}", flush=True)
+
+    try:
+        output = subprocess.check_output(command, shell=True, stderr=subprocess.STDOUT, timeout=30)
+        output_text = output.decode("utf-8", errors="ignore")
+        print(f"[命令注入漏洞] 命令执行成功: {command}", flush=True)
+        return render_template("ping.html", output=output_text, command=command)
+    except subprocess.TimeoutExpired:
+        print(f"[命令注入漏洞] 命令超时: {command}", flush=True)
+        return render_template("ping.html", output="命令执行超时（30秒）", error=True, command=command)
+    except subprocess.CalledProcessError as e:
+        output_text = e.output.decode("utf-8", errors="ignore") if e.output else str(e)
+        print(f"[命令注入漏洞] 命令执行失败: {command}", flush=True)
+        return render_template("ping.html", output=output_text, error=True, command=command)
+    except Exception as e:
+        print(f"[命令注入漏洞] 执行异常: {command} -> {str(e)}", flush=True)
+        return render_template("ping.html", output=f"执行错误: {str(e)}", error=True, command=command)
 
 
 # ============================================================

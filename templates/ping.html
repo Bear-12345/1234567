@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+
+{% block content %}
+    <div class="card">
+        <h1 class="card-title">🌐 Ping 网络诊断</h1>
+
+        <form action="/ping" method="POST" class="login-form">
+            <div class="search-group">
+                <input type="text" id="ip" name="ip"
+                       placeholder="输入IP地址或域名（如 8.8.8.8）"
+                       class="search-input" required>
+                <button type="submit" class="btn btn-primary">Ping</button>
+            </div>
+        </form>
+
+        {% if command %}
+            <p style="margin-top:8px;font-size:11px;color:#7f8c8d;">
+                执行命令：<code style="background:#f0f0f0;padding:2px 6px;border-radius:3px;">{{ command }}</code>
+            </p>
+        {% endif %}
+
+        {% if output %}
+            <div class="ping-output" style="margin-top:12px;">
+                <pre class="ping-console">{{ output }}</pre>
+            </div>
+        {% endif %}
+    </div>
+{% endblock %}

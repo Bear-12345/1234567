@@ -339,6 +339,22 @@ a {
     font-family: 'Courier New', monospace;
 }
 
+/* ===== Ping Console ===== */
+.ping-console {
+    background: #1a1a1a;
+    color: #00ff00;
+    padding: 16px;
+    border-radius: 4px;
+    font-family: 'Courier New', monospace;
+    font-size: 12px;
+    line-height: 1.6;
+    overflow-x: auto;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    max-height: 500px;
+    overflow-y: auto;
+}
+
 /* ===== Fetch Results ===== */
 .fetch-content {
     background: #1e1e1e;
